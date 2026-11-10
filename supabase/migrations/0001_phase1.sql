@@ -426,6 +426,8 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------- permissions
+-- Explicit, so this works even when Supabase's "automatically expose new tables" is off.
+grant usage on schema public to anon, authenticated, service_role;
 revoke execute on all functions in schema public from public, anon, authenticated;
 grant execute on function tfd_state(), tfd_settings(), tfd_setting_history(text), tfd_set_setting(text, jsonb, timestamptz, text),
   tfd_set_rate(text, text, int, int, timestamptz, text), tfd_set_role(text, jsonb, text), tfd_users(),
