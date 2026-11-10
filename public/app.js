@@ -124,6 +124,7 @@ function route() {
   const tab = TABS.find(t => t.id === id);
   if (id === 'settings') return renderSettings();
   if (id === 'activity') return renderActivity();
+  if (id === 'inventory') return renderInventory();
   $('#main').innerHTML = `<div class="panel placeholder"><h1>${tab.label}</h1>
     <p class="muted">This tab is fully spec'd and gets built in Phase ${tab.phase}.</p></div>`;
 }
@@ -384,11 +385,15 @@ function secSecurity(el) {
 }
 function secWhatnot(el) {
   const v = S.settings.settings.whatnot_export;
+  const txt = (id, label, val, ph = '') => `<label class="f">${label}<input id="${id}" class="inp" value="${esc(val || '')}" placeholder="${ph}"></label>`;
   el.innerHTML = `<div class="panel"><div class="head"><h2>Whatnot export</h2>${historyLink('whatnot_export')}</div>
-    <p class="muted small">Default Category and Sub Category written into the Whatnot bulk-upload file. They must match Whatnot's own options exactly.</p>
-    <div class="grid"><label class="f">Category<input id="wn_c" class="inp" value="${esc(v.category)}"></label><label class="f">Sub Category<input id="wn_s" class="inp" value="${esc(v.subcategory)}"></label></div>
+    <p class="muted small">Values written into every row of the Whatnot bulk-upload file. Type them exactly as Whatnot's own template expects (copy them from a row Whatnot accepted).</p>
+    <div class="grid">${txt('wn_c', 'Category', v.category)}${txt('wn_s', 'Sub Category', v.subcategory)}${txt('wn_t', 'Type', v.type, 'Not set')}
+      <label class="f">Price column<select id="wn_p" class="inp"><option value="retail" ${v.price_source === 'retail' ? 'selected' : ''}>Retail price</option><option value="floor" ${v.price_source === 'floor' ? 'selected' : ''}>Floor price (Whatnot)</option></select></label>
+      ${txt('wn_sp', 'Shipping Profile', v.shipping_profile, 'Not set')}${txt('wn_o', 'Offerable', v.offerable, 'e.g. TRUE or FALSE')}${txt('wn_h', 'Hazmat', v.hazmat, 'Not set')}${txt('wn_cd', 'Condition', v.condition, 'Not set')}</div>
     <div class="actions"><button class="btn primary" id="wns">Save</button></div></div>`;
-  $('#wns').onclick = e => saveSetting('whatnot_export', { category: $('#wn_c').value, subcategory: $('#wn_s').value }, e.target);
+  $('#wns').onclick = e => saveSetting('whatnot_export', { category: $('#wn_c').value, subcategory: $('#wn_s').value, type: $('#wn_t').value, price_source: $('#wn_p').value,
+    shipping_profile: $('#wn_sp').value, offerable: $('#wn_o').value.toUpperCase(), hazmat: $('#wn_h').value, condition: $('#wn_cd').value }, e.target);
   wireHistory(el);
 }
 function secLists(el) {

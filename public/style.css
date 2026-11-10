@@ -90,8 +90,14 @@ tr:last-child td { border-bottom: 0; }
 .toast.bad { background: var(--bad); }
 .hidden { display: none !important; }
 
-.modal-bg { position: fixed; inset: 0; background: #0006; display: grid; place-items: center; z-index: 40; padding: 16px; }
-.modal { background: #fff; border-radius: 14px; padding: 22px; width: 100%; max-width: 460px; }
+.modal-bg { position: fixed; inset: 0; background: #0006; display: grid; place-items: center; z-index: 40; padding: 16px; overflow-y: auto; }
+.modal { background: #fff; border-radius: 14px; padding: 22px; width: 100%; max-width: 620px; max-height: calc(100vh - 32px); overflow-y: auto; }
 
 .roles select.inp { padding: 6px 6px; font-size: 0.85rem; }
 .roles td, .roles th { padding: 8px 6px; }
+a.btn { color: var(--ink); text-decoration: none; display: inline-block; }
+a.btn.primary { color: var(--accent-ink); }
+#stbl td:nth-child(2) { min-width: 260px; }
+#stbl td, #stbl th { white-space: nowrap; }
+#stbl td:nth-child(2) { white-space: normal; }
+main { max-width: 1280px; }

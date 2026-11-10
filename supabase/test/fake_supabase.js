@@ -59,7 +59,8 @@ async function supabase(req, res, url) {
   if (p.startsWith('/rest/v1/rpc/')) {
     const fn = p.split('/').pop(); const b = await body(req); const t = bearer(req);
     const role = t === SERVICE ? 'service_role' : t === ANON ? 'anon' : 'authenticated';
-    const args = argTypes(fn).filter(([n]) => n in b).map(([n, ty]) => `${n} => ${b[n] === null ? 'null' : lit(typeof b[n] === 'object' ? JSON.stringify(b[n]) : b[n])}::${ty}`);
+    const val = (v, ty) => v === null ? 'null' : ty.endsWith('[]') ? `(select array_agg(x) from jsonb_array_elements_text(${lit(JSON.stringify(v))}::jsonb) x)::${ty}` : `${lit(typeof v === 'object' ? JSON.stringify(v) : v)}::${ty}`;
+    const args = argTypes(fn).filter(([n]) => n in b).map(([n, ty]) => `${n} => ${val(b[n], ty)}`);
     const r = sql(`select to_jsonb(${fn}(${args.join(', ')}))`, role, role === 'authenticated' ? t : null);
     return r.ok ? json(res, 200, r.out ? JSON.parse(r.out) : null) : json(res, 400, { message: r.err });
   }
