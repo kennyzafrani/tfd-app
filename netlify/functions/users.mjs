@@ -20,7 +20,7 @@ async function caller(req) {
   const h = req.headers.get('authorization') || '';
   if (!h.startsWith('Bearer ')) return null;
   const r = await fetch(URL_ + '/auth/v1/user', { headers: { apikey: SERVICE, Authorization: h } });
-  if (!r.ok) return null;
+  if (!r.ok) return { expired: true };   // e.g. password changed -> Supabase ends every session for that login
   const u = await r.json();
   const p = await (await svc(`/rest/v1/profiles?auth_id=eq.${encodeURIComponent(u.id)}&active=eq.true&select=id,name,role`)).json();
   return p[0] ? { authId: u.id, ...p[0] } : null;
@@ -29,6 +29,7 @@ async function setupNeeded() {
   const r = await (await svc('/rest/v1/profiles?role=eq.admin&select=id&limit=1')).json();
   return !Array.isArray(r) || r.length === 0;
 }
+const EXPIRED = 'Your sign-in has ended (for example, the password was changed). Please sign in again.';
 const reply = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 const fail = (status, error) => reply(status, { error });
 
@@ -41,6 +42,7 @@ export default async (req) => {
     if (req.method === 'POST') {
       const first = await setupNeeded();
       const me = first ? null : await caller(req);
+      if (me && me.expired) return fail(401, EXPIRED);
       if (!first && (!me || me.role !== 'admin')) return fail(403, 'Admins only');
       if (first && b.role !== 'admin') return fail(400, 'The first person must be an admin');
       const login = (b.login || '').trim();
@@ -64,6 +66,7 @@ export default async (req) => {
 
     if (req.method === 'PATCH') {
       const me = await caller(req);
+      if (me && me.expired) return fail(401, EXPIRED);
       if (!me || me.role !== 'admin') return fail(403, 'Admins only');
       if (!b.password || String(b.password).length < 8) return fail(400, 'Password must be at least 8 characters');
       const p = await (await svc(`/rest/v1/profiles?id=eq.${Number(b.id)}&select=auth_id,name,role`)).json();

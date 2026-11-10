@@ -43,6 +43,7 @@ async function server(method, path, body) {   // the website's own server functi
   const t = await token();
   const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: 'Bearer ' + t } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const d = await r.json().catch(() => ({}));
+  if (r.status === 401 && S.state && S.state.me) { await signOut(); toast(d.error || 'Please sign in again', true); document.querySelectorAll('.modal-bg').forEach(x => x.remove()); await boot(); throw new Error(d.error || 'Signed out'); }
   if (!r.ok) throw new Error(d.error || 'Request failed');
   return d;
 }
@@ -276,7 +277,10 @@ async function secPeople(el) {
         if ($('#ep').value) await server('PATCH', '/api/users', { id: u.id, password: $('#ep').value });
         const h = F.read.money('eh', true), c = F.read.pct('ec', true);
         if (h !== pr.hourly_cents || c !== pr.commission_bp) await rpc('tfd_set_rate', { p_scope: 'user', p_target: String(u.id), p_hourly_cents: h, p_commission_bp: c });
-        m.remove(); toast('Saved'); renderSettings();
+        const ownPw = !!$('#ep').value && u.id === S.state.me.id;
+        m.remove();
+        if (ownPw && u.id === S.state.me.id) { await signOut(); await boot(); return toast('Password changed. Sign in with your new password.'); }
+        toast('Saved'); renderSettings();
       } catch (e) { $('#ee').textContent = e.message; }
     };
   });
