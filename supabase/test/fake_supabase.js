@@ -1,6 +1,6 @@
 'use strict';
 // Test harness: a tiny stand-in for Supabase (Auth + PostgREST RPC) backed by a real local Postgres,
-// plus a stand-in for Vercel (static files + /api functions). Test use only.
+// plus a stand-in for Netlify (static files + /api functions). Test use only.
 //   node fake_supabase.js <psql socket dir> <db name> <port>
 const http = require('node:http'); const fs = require('node:fs'); const path = require('node:path');
 const { execFileSync } = require('node:child_process'); const crypto = require('node:crypto');
@@ -77,11 +77,12 @@ http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   try {
     if (url.pathname.startsWith('/sb/')) { url.pathname = url.pathname.slice(3); return await supabase(req, res, url); }
-    if (url.pathname.startsWith('/api/')) {
-      const fn = require(path.join(WEB, 'api', url.pathname.slice(5) + '.js'));
-      req.body = req.method === 'GET' ? {} : await body(req);
-      res.status = c => { res.statusCode = c; return res; }; res.json = o => json(res, res.statusCode, o);
-      return await fn(req, res);
+    if (url.pathname.startsWith('/api/')) {   // stand-in for Netlify functions
+      globalThis.Netlify = { env: { get: k => process.env[k] } };
+      const mod = await import(path.join(WEB, 'netlify/functions', url.pathname.slice(5) + '.mjs'));
+      const b = req.method === 'GET' ? undefined : await (async () => { let s = ''; for await (const c of req) s += c; return s; })();
+      const r = await mod.default(new Request('http://x' + req.url, { method: req.method, headers: req.headers, body: b }));
+      res.writeHead(r.status, { 'Content-Type': 'application/json' }); return res.end(await r.text());
     }
     const f = path.join(WEB, 'public', url.pathname === '/' ? 'index.html' : url.pathname);
     res.writeHead(200, { 'Content-Type': f.endsWith('.js') ? 'text/javascript' : f.endsWith('.css') ? 'text/css' : 'text/html' });

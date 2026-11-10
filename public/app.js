@@ -59,7 +59,7 @@ function toast(msg, bad) {
 // ---------------- boot / sign in ----------------
 async function boot() {
   if (!CFG) CFG = await (await fetch('/api/config')).json();
-  if (!CFG.url) throw new Error('The website is missing its Supabase settings (SUPABASE_URL / SUPABASE_ANON_KEY in Vercel).');
+  if (!CFG.url) throw new Error('The website is missing its Supabase settings (SUPABASE_URL / SUPABASE_ANON_KEY in Netlify).');
   S.state = null;
   if (await token()) {
     S.state = await rpc('tfd_state');
