@@ -249,7 +249,7 @@ async function lotView(el, id) {
   $('#hn').oninput = () => { nameEdited = true; };
 
   if (!draft) {
-    $('#hn').onchange = async () => { try { const x = await rpc('tfd_receipt_header', { p_id: id, p_supplier: r.supplier, p_invoice_no: r.invoice_no, p_date: r.received_date, p_name: $('#hn').value }); toast('Renamed'); $('#lname').firstChild.textContent = x.name + ' '; } catch (e) { toast(e.message, true); } };
+    $('#hn').onchange = async () => { try { const x = await rpc('tfd_lot_header', { p_id: id, p_supplier: r.supplier, p_invoice_no: r.invoice_no, p_date: r.received_date, p_name: $('#hn').value }); toast('Renamed'); $('#lname').firstChild.textContent = x.name + ' '; } catch (e) { toast(e.message, true); } };
     $('#labels').onclick = () => printLabels(r.lines.filter(l => l.result_sku).map(l => ({ sku: l.result_sku, name: l.name || `${l.brand || ''} ${l.model || ''}`, qty: l.received_qty })));
     $('#lgrid').innerHTML = `<tr><th class="stk0">#</th><th class="stk1">SKU</th>${LOT_COLS.map(c => `<th>${c[1]}</th>`).join('')}</tr>
       ${r.lines.map(l => `<tr><td class="stk0">${l.line_no}</td><td class="stk1">${l.result_sku ? `<a href="#" data-sku="${l.result_sku}" class="mono"><b>${l.result_sku}</b></a>` : '<span class="muted small">no SKU (0 received)</span>'}
@@ -262,7 +262,7 @@ async function lotView(el, id) {
   // ---- draft: editable grid
   const lines = r.lines;
   const saveHeader = async () => {
-    try { const x = await rpc('tfd_receipt_header', { p_id: id, p_supplier: $('#hs').value, p_invoice_no: $('#hi').value, p_date: $('#hd').value, p_name: nameEdited ? $('#hn').value : null });
+    try { const x = await rpc('tfd_lot_header', { p_id: id, p_supplier: $('#hs').value, p_invoice_no: $('#hi').value, p_date: $('#hd').value, p_name: nameEdited ? $('#hn').value : null });
       $('#hn').value = x.name; $('#lname').firstChild.textContent = x.name + ' '; nameEdited = false; refresh(); } catch (e) { toast(e.message, true); }
   };
   ['#hn', '#hs', '#hi', '#hd'].forEach(s => $(s).addEventListener('change', saveHeader));

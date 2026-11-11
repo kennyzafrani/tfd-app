@@ -49,10 +49,10 @@ select pg_temp.ok((select count(*) from jsonb_array_elements_text((tfd_receipt(:
 select pg_temp.ok((select count(*) from jsonb_array_elements_text((tfd_receipt(:r3))->'issues') x where x in ('Supplier is required', 'At least one lot photo is required')) = 2, 'lot-level requirements');
 select pg_temp.fails(format($f$select tfd_lot_photo_add(%s, 'lot-999/x.jpg')$f$, :r3), 'photo path must match lot', '%doesn''t belong%');
 select tfd_lot_photo_add(:r3, 'lot-' || :r3 || '/box.jpg', 'box');
-select tfd_receipt_header(:r3, 'Designer Eyes', 'INV-102', '2026-11-12');
+select tfd_lot_header(:r3, 'Designer Eyes', 'INV-102', '2026-11-12');
 select pg_temp.ok((tfd_receipt(:r3))->>'name' = 'Designer Eyes · INV-102 · 2026-11-12', 'auto name follows header');
-select tfd_receipt_header(:r3, 'Designer Eyes', 'INV-102', '2026-11-12', 'Big Nov drop');
-select tfd_receipt_header(:r3, 'Designer Eyes', 'INV-103', '2026-11-12');
+select tfd_lot_header(:r3, 'Designer Eyes', 'INV-102', '2026-11-12', 'Big Nov drop');
+select tfd_lot_header(:r3, 'Designer Eyes', 'INV-103', '2026-11-12');
 select pg_temp.ok((tfd_receipt(:r3))->>'name' = 'Big Nov drop', 'custom name kept');
 select pg_temp.ok((select count(*) from jsonb_array_elements_text((tfd_receipt(:r3))->'issues')) = 3, 'only image issues left');
 select pg_temp.ok((tfd_set_setting('inventory', '{"required_fields":["received_qty"],"show_suggest_max_units":5,"show_suggest_min_shows":8,"low_stock_default":2}'))->>'ok' = 'true', 'req back');
@@ -65,7 +65,7 @@ select pg_temp.ok(jsonb_array_length((tfd_bin_detail('NOT_ASSIGNED'))->'history'
 select pg_temp.ok((select (r->>'skus')::int from jsonb_array_elements(tfd_receipts()) r where r->>'name' = 'Big Nov drop') = 4, 'lot list: 4 SKUs');
 select pg_temp.ok((select r->>'search' ilike '%OO9208%' from jsonb_array_elements(tfd_receipts()) r where r->>'name' = 'Big Nov drop'), 'lot search text');
 select pg_temp.ok(jsonb_array_length((tfd_field_values())->'brand') >= 3 and (tfd_field_values())->'bin'->>0 = 'NOT_ASSIGNED', 'dropdown values');
-select pg_temp.fails(format($f$select tfd_receipt_header(%s, 'X', 'Y', '2026-01-01')$f$, :r3), 'confirmed lot only renames', '%Only the lot name%');
+select pg_temp.fails(format($f$select tfd_lot_header(%s, 'X', 'Y', '2026-01-01')$f$, :r3), 'confirmed lot only renames', '%Only the lot name%');
 
 -- alerts: dismiss until stock changes
 select set_config('tfd.oak', (select r->>'sku' from jsonb_array_elements(tfd_stock()) r where r->>'brand' = 'Oakley'), false);
@@ -102,6 +102,22 @@ select tfd_version_restore(:tx_edit, 'back to before the lot', 'RESTORE');
 select pg_temp.ok(not exists (select 1 from jsonb_array_elements(tfd_receipts()) r where r->>'name' = 'Big Nov drop'), 'lot gone');
 select pg_temp.ok(not exists (select 1 from jsonb_array_elements(tfd_stock()) r where r->>'brand' = 'Oakley'), 'new SKUs gone');
 select pg_temp.ok((select (r->>'on_hand')::int = 13 from jsonb_array_elements(tfd_stock()) r where r->>'sku' = '100001'), '100001 back to 13');
+
+-- dropdown values: usage, fix spelling, merge, collisions
+select pg_temp.ok(exists (select 1 from jsonb_array_elements(tfd_value_usage('brand')) v where v->>'value' = 'prada'), 'usage lists values');
+select pg_temp.ok((tfd_value_rename('brand', 'prada', 'Prada'))->>'needs_confirm' = 'true', 'rename previews first');
+select pg_temp.ok((tfd_value_rename('brand', 'prada', 'Prada', true))->>'skus' = '1', 'rename brand');
+reset role;
+select pg_temp.ok((select brand from products where sku = '100002') = 'Prada' and (select ident from products where sku = '100002') = tfd_ident('Prada', 'PR 17WS', '1AB5S0', '49'), 'brand fixed, ident kept');
+set role authenticated;
+select pg_temp.ok((tfd_value_rename('color_code', '002', '001'))->>'blocked' like '%100001 & 100003%', 'collision shown in preview');
+select pg_temp.fails($$select tfd_value_rename('color_code', '002', '001', true)$$, 'collision blocked', '%identical%');
+select tfd_value_rename('supplier', 'designer eyes', 'Designer Eyes Inc', true);
+select pg_temp.ok((select count(*) from jsonb_array_elements(tfd_receipts()) r where r->>'name' like 'Designer Eyes Inc ·%') = 2, 'supplier fixed + lot names follow');
+select pg_temp.fails($$select tfd_value_rename('bin', 'NOT_ASSIGNED', 'X', true)$$, 'NOT_ASSIGNED locked', '%can''t be renamed%');
+select pg_temp.fails($$select tfd_value_rename('bin', 'A5', 'a4', true)$$, 'no bin clash', '%already exists%');
+select tfd_value_rename('bin', 'A5', 'a6', true);
+select pg_temp.ok(exists (select 1 from jsonb_array_elements(tfd_bins()) b where b->>'code' = 'A6'), 'bin renamed');
 
 -- packer locked out
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);

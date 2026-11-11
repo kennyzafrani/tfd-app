@@ -135,6 +135,15 @@ const ok = (c, m) => { if (!c) throw new Error('FAILED: ' + m); console.log('ok 
   await page.goto(BASE + '/#inventory/lots'); await page.waitForSelector('#ltbl');
   ok((await page.locator('#ltbl tr[data-r]').count()) === 1, 'lot 2 reversed by restore');
 
+  // Settings → Dropdown values: fix a spelling everywhere
+  await page.goto(BASE + '/#settings/values'); await page.waitForSelector('#vt');
+  await page.locator('tr', { hasText: 'Ray-Ban' }).locator('[data-ed]').click();
+  await page.fill('#vn', 'Ray Ban'); await page.click('#vchk'); await page.waitForSelector('#vgo:not(.hidden)');
+  ok((await page.textContent('#vp')).includes('SKU'), 'rename preview');
+  await shot(page, '11-values'); await page.click('#vgo'); await page.waitForTimeout(600);
+  await page.goto(BASE + '/#inventory/stock'); await page.waitForSelector('#stbl');
+  ok((await page.textContent('#stbl')).includes('Ray Ban') && !(await page.textContent('#stbl')).includes('Ray-Ban'), 'spelling fixed everywhere');
+
   // mobile width sanity
   await page.setViewportSize({ width: 390, height: 844 }); await page.goto(BASE + '/#inventory/lots'); await page.waitForSelector('#ltbl'); await page.click('#ltbl tr[data-r]'); await page.waitForSelector('#lgrid');
   await shot(page, '10-mobile');

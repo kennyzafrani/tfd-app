@@ -201,8 +201,7 @@ begin
   return rid;
 end $$;
 
-drop function if exists tfd_receipt_header(bigint, text, text, date);
-create or replace function tfd_receipt_header(p_id bigint, p_supplier text, p_invoice_no text, p_date date, p_name text default null) returns jsonb
+create or replace function tfd_lot_header(p_id bigint, p_supplier text, p_invoice_no text, p_date date, p_name text default null) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare me profiles; r receipts; auto text; nm text; custom boolean;
 begin
@@ -511,8 +510,9 @@ end $$;
 
 do $$ declare t text; begin
   foreach t in array array['bins','products','receipts','receipt_lines','cost_layers','stock_moves','inv_lists','lot_photos','alert_dismissals'] loop
-    execute format('drop trigger if exists tfd_track on %I', t);
-    execute format('create trigger tfd_track after insert or update or delete on %I for each row execute function tfd_track(%L)', t, case when t = 'products' then 'sku' else 'id' end);
+    if not exists (select 1 from pg_trigger where tgname = 'tfd_track' and tgrelid = t::regclass) then
+      execute format('create trigger tfd_track after insert or update or delete on %I for each row execute function tfd_track(%L)', t, case when t = 'products' then 'sku' else 'id' end);
+    end if;
   end loop;
 end $$;
 
@@ -564,24 +564,100 @@ begin
   return jsonb_build_object('ok', true, 'actions', cardinality(txs), 'changes', n);
 end $$;
 
+-- ---------------------------------------------------------------- dropdown values: see usage, fix spelling / merge everywhere
+create or replace function tfd_value_usage(p_field text) returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare out jsonb;
+begin
+  perform tfd_require('admin');
+  if p_field = 'supplier' then
+    select coalesce(jsonb_agg(jsonb_build_object('value', v, 'lots', n, 'skus', 0, 'rows', 0) order by lower(v)), '[]') into out
+      from (select min(supplier) v, count(*) n from receipts where supplier is not null group by lower(trim(supplier))) x;
+  elsif p_field = 'bin' then
+    select coalesce(jsonb_agg(jsonb_build_object('value', b.code, 'skus', (select count(*) from products p where p.bin_id = b.id), 'rows', 0, 'lots', 0) order by b.code = 'NOT_ASSIGNED' desc, b.code), '[]') into out from bins b;
+  elsif p_field in ('brand','model','color_code','lens_size','name','color_name','category','subcategory','specs') then
+    execute format('select coalesce(jsonb_agg(jsonb_build_object(''value'', v, ''skus'', ps, ''rows'', ls, ''lots'', 0) order by lower(v)), ''[]'') from (
+        select min(v) v, sum(p) ps, sum(l) ls from (select %1$I v, 1 p, 0 l from products union all select %1$I, 0, 1 from receipt_lines) a
+        where v is not null and trim(v) <> '''' group by lower(trim(v))) x', p_field) into out;
+  else raise exception 'Unknown field'; end if;
+  return out;
+end $$;
+
+create or replace function tfd_value_rename(p_field text, p_old text, p_new text, p_confirm boolean default false) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me profiles; nv text := trim(coalesce(p_new, '')); o text := lower(trim(coalesce(p_old, ''))); np int := 0; nl int := 0; nr int := 0; dup text; merge boolean := false;
+  idf text[] := array['brand','model','color_code','lens_size']; ex text; ey text;
+begin
+  me := tfd_require('admin');
+  if nv = '' then raise exception 'Type the new spelling'; end if;
+  if p_field = 'supplier' then
+    select count(*) into nr from receipts where lower(trim(supplier)) = o;
+    merge := exists (select 1 from receipts where lower(trim(supplier)) = lower(nv) and lower(trim(supplier)) <> o);
+  elsif p_field = 'bin' then
+    if upper(trim(p_old)) = 'NOT_ASSIGNED' then raise exception 'NOT_ASSIGNED can''t be renamed'; end if;
+    nv := upper(nv);
+    if nv !~ '^[A-Z0-9][A-Z0-9 ._-]{0,19}$' then raise exception 'Bin "%" isn''t a valid bin code (letters, numbers, dashes)', nv; end if;
+    if exists (select 1 from bins where code = nv and code <> upper(trim(p_old))) then raise exception 'Bin % already exists. Use Move SKU to move SKUs into it', nv; end if;
+    select count(*) into np from products p join bins b on b.id = p.bin_id where b.code = upper(trim(p_old));
+    if not exists (select 1 from bins where code = upper(trim(p_old))) then raise exception 'No such bin'; end if;
+    nr := 1;  -- the bin itself
+  elsif p_field = any(idf) or p_field in ('name','color_name','category','subcategory','specs') then
+    execute format('select count(*) from products where lower(trim(%I)) = $1', p_field) using o into np;
+    execute format('select count(*) from receipt_lines where lower(trim(%I)) = $1', p_field) using o into nl;
+    execute format('select exists (select 1 from products where lower(trim(%1$I)) = lower($1) and lower(trim(%1$I)) <> $2) or exists (select 1 from receipt_lines where lower(trim(%1$I)) = lower($1) and lower(trim(%1$I)) <> $2)', p_field)
+      using nv, o into merge;
+    if p_field = any(idf) then
+      -- would any two SKUs end up with the same brand + model + color + size?
+      ex := array_to_string(array(select case when c = p_field then format('case when lower(trim(x.%1$I)) = $1 then $2 else x.%1$I end', c) else 'x.' || c end from unnest(idf) c), ', ');
+      ey := array_to_string(array(select case when c = p_field then format('case when lower(trim(y.%1$I)) = $1 then $2 else y.%1$I end', c) else 'y.' || c end from unnest(idf) c), ', ');
+      execute format('select string_agg(x.sku || '' & '' || y.sku, '', '') from products x join products y on x.sku < y.sku
+          where tfd_full_ident(%s) is not null and tfd_full_ident(%s) = tfd_full_ident(%s)', ex, ex, ey) using o, nv into dup;
+    end if;
+  else raise exception 'Unknown field'; end if;
+  if np + nl + nr = 0 then raise exception 'Nothing uses "%"', p_old; end if;
+  if not p_confirm then
+    return jsonb_build_object('needs_confirm', true, 'skus', np, 'rows', nl, 'lots', case when p_field = 'bin' then 0 else nr end, 'merge', merge, 'blocked', dup);
+  end if;
+  if dup is not null then raise exception 'That would make SKUs identical (same brand, model, color, size): %. Fix one of them first', dup; end if;
+  if p_field = 'supplier' then
+    update receipts set supplier = nv where lower(trim(supplier)) = o;
+    update receipts set name = tfd_lot_auto_name(supplier, invoice_no, received_date) where not name_custom and supplier = nv;
+  elsif p_field = 'bin' then
+    update bins set code = nv where code = upper(trim(p_old));
+  else
+    execute format('update products set %1$I = $2 where lower(trim(%1$I)) = $1', p_field) using o, nv;
+    execute format('update receipt_lines set %1$I = $2 where lower(trim(%1$I)) = $1', p_field) using o, nv;
+    if p_field = any(idf) then
+      update products set ident = tfd_full_ident(brand, model, color_code, lens_size) where ident is distinct from tfd_full_ident(brand, model, color_code, lens_size);
+    end if;
+  end if;
+  perform tfd_log(me.name, 'Inventory', 'value_rename', initcap(replace(p_field, '_', ' ')) || ' "' || p_old || '" → "' || nv || '"' || case when merge then ' (merged)' else '' end ||
+    ' in ' || coalesce(nullif(concat_ws(', ', nullif(np, 0) || ' SKU(s)', nullif(nl, 0) || ' lot row(s)', case when p_field = 'supplier' then nullif(nr, 0) || ' lot(s)' end), ''), 'the bin list'),
+    jsonb_build_object('field', p_field, 'old', p_old, 'new', nv));
+  return jsonb_build_object('ok', true, 'skus', np, 'rows', nl, 'lots', nr);
+end $$;
+
 -- ---------------------------------------------------------------- lot photo storage (private bucket, admins only)
 insert into storage.buckets (id, name, public) values ('lot-photos', 'lot-photos', false) on conflict (id) do nothing;
-drop policy if exists "tfd lot photos read" on storage.objects;
-drop policy if exists "tfd lot photos add" on storage.objects;
-create policy "tfd lot photos read" on storage.objects for select to authenticated using (bucket_id = 'lot-photos' and public.tfd_is_admin());
-create policy "tfd lot photos add" on storage.objects for insert to authenticated with check (bucket_id = 'lot-photos' and public.tfd_is_admin());
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname = 'tfd lot photos read') then
+    create policy "tfd lot photos read" on storage.objects for select to authenticated using (bucket_id = 'lot-photos' and public.tfd_is_admin());
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname = 'tfd lot photos add') then
+    create policy "tfd lot photos add" on storage.objects for insert to authenticated with check (bucket_id = 'lot-photos' and public.tfd_is_admin());
+  end if;
+end $$;
 
 -- ---------------------------------------------------------------- grants
 revoke execute on all functions in schema public from public, anon, authenticated;
 grant execute on function tfd_state(), tfd_settings(), tfd_setting_history(text), tfd_set_setting(text, jsonb, timestamptz, text),
   tfd_set_rate(text, text, int, int, timestamptz, text), tfd_set_role(text, jsonb, text), tfd_users(),
   tfd_update_user(bigint, text, text, boolean, text), tfd_floor_preview(int, text), tfd_activity(jsonb), tfd_undo(bigint, text, boolean),
-  tfd_receipt_create(text, text, date, jsonb, text), tfd_receipt_header(bigint, text, text, date, text), tfd_receipt_line_save(bigint, bigint, jsonb),
+  tfd_receipt_create(text, text, date, jsonb, text), tfd_lot_header(bigint, text, text, date, text), tfd_receipt_line_save(bigint, bigint, jsonb),
   tfd_receipt_line_delete(bigint, bigint), tfd_receipt_discard(bigint), tfd_receipts(), tfd_receipt(bigint), tfd_receipt_confirm(bigint),
   tfd_lot_match_all(bigint), tfd_field_values(), tfd_lot_photo_add(bigint, text, text), tfd_lot_photo_delete(bigint),
   tfd_product_update(text, jsonb, text), tfd_stock(), tfd_sku_history(text), tfd_adjust(text, text, int, text, text, boolean), tfd_alert_dismiss(text, text),
   tfd_bins(), tfd_bin_detail(text), tfd_bin_create(text, text), tfd_move_sku(text, text), tfd_bin_verify(text, jsonb, boolean),
   tfd_lists(), tfd_list_save(bigint, text, text, jsonb, int, text[]), tfd_list_delete(bigint), tfd_whatnot_export(bigint), tfd_export_logged(text, int),
-  tfd_versions(int), tfd_version_restore(bigint, text, text), tfd_is_admin()
+  tfd_versions(int), tfd_version_restore(bigint, text, text), tfd_is_admin(), tfd_value_usage(text), tfd_value_rename(text, text, text, boolean)
   to authenticated;
 grant execute on function tfd_create_profile(uuid, uuid, text, text, text), tfd_log_from_server(uuid, text, text) to service_role;

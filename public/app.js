@@ -134,7 +134,7 @@ window.addEventListener('hashchange', () => S.state && S.state.me && route());
 // ---------------- settings ----------------
 const SECTIONS = [
   ['platforms', 'Platforms & fees'], ['pay', 'Pay rates & overtime'], ['people', 'People'], ['roles', 'Roles & access'],
-  ['pricing', 'Pricing'], ['rules', 'Rules'], ['inventory', 'Inventory'], ['photos', 'Packing photos'],
+  ['pricing', 'Pricing'], ['rules', 'Rules'], ['inventory', 'Inventory'], ['values', 'Dropdown values'], ['photos', 'Packing photos'],
   ['backups', 'Backups'], ['security', 'Security'], ['whatnot', 'Whatnot export'],
 ];
 async function renderSettings() {
@@ -145,7 +145,7 @@ async function renderSettings() {
     <div class="settings"><nav class="side">${SECTIONS.map(([k, l]) => `<a href="#settings/${k}" class="${k === S.section ? 'on' : ''}">${l}</a>`).join('')}</nav>
     <div id="sec"></div></div>`;
   const fn = { platforms: secPlatforms, pay: secPay, people: secPeople, roles: secRoles, pricing: secPricing, rules: secRules,
-    inventory: secInventory, photos: secPhotos, backups: secBackups, security: secSecurity, whatnot: secWhatnot }[S.section];
+    inventory: secInventory, values: secValues, photos: secPhotos, backups: secBackups, security: secSecurity, whatnot: secWhatnot }[S.section];
   await fn($('#sec'));
 }
 
@@ -370,6 +370,50 @@ function secInventory(el) {
     } catch (err) { toast(err.message, true); }
   };
   wireHistory(el);
+}
+const VALUE_FIELDS = [['supplier', 'Supplier'], ['brand', 'Brand'], ['model', 'Model #'], ['color_code', 'Color code'], ['lens_size', 'Lens size'], ['name', 'Product name'],
+  ['color_name', 'Color name'], ['category', 'Category'], ['subcategory', 'Subcategory'], ['specs', 'Specs'], ['bin', 'Bin']];
+async function secValues(el) {
+  S.valueField = S.valueField || 'brand';
+  const vals = await rpc('tfd_value_usage', { p_field: S.valueField });
+  el.innerHTML = `<div class="panel"><h2>Dropdown values</h2>
+    <p class="muted small">Every value you've typed in a lot shows up in the dropdowns. Fix a misspelling here and it changes everywhere: SKUs, lots (including confirmed ones) and the dropdowns.
+      Renaming to a value that already exists merges the two. Every change is logged and can be rolled back from Inventory → Versions.</p>
+    <div class="row" style="margin-bottom:12px"><select id="vf" class="inp">${VALUE_FIELDS.map(([k, l]) => `<option value="${k}" ${k === S.valueField ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <input id="vq" class="inp" placeholder="Search values" style="flex:1;min-width:160px"></div>
+    <table id="vt"></table></div>`;
+  const used = v => S.valueField === 'supplier' ? `${v.lots} lot(s)` : S.valueField === 'bin' ? `${v.skus} SKU(s)` : [v.skus ? v.skus + ' SKU(s)' : '', v.rows ? v.rows + ' lot row(s)' : ''].filter(Boolean).join(', ');
+  const draw = () => {
+    const lc = $('#vq').value.trim().toLowerCase();
+    $('#vt').innerHTML = `<tr><th>Value</th><th>Used in</th><th></th></tr>${vals.filter(v => !lc || v.value.toLowerCase().includes(lc)).map(v => `<tr><td><b>${esc(v.value)}</b></td><td class="small">${used(v)}</td>
+      <td>${S.valueField === 'bin' && v.value === 'NOT_ASSIGNED' ? '' : `<button class="btn" data-ed="${esc(v.value)}">Fix spelling</button>`}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No values yet.</td></tr>'}`;
+    el.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => editValue(b.dataset.ed));
+  };
+  const editValue = old => {
+    const label = VALUE_FIELDS.find(f => f[0] === S.valueField)[1];
+    const m = modal(`<h2>Fix ${esc(label.toLowerCase())}</h2><p>Current: <b>${esc(old)}</b></p>
+      <label class="f">Change to<input id="vn" class="inp" value="${esc(old)}"></label><div id="vp"></div>
+      <div class="err" id="ve"></div><div class="actions"><button class="btn" id="vchk">Preview</button><button class="btn primary hidden" id="vgo">Change everywhere</button></div>`);
+    const go = async confirm => {
+      try {
+        const r = await rpc('tfd_value_rename', { p_field: S.valueField, p_old: old, p_new: $('#vn').value, p_confirm: confirm });
+        if (!confirm) {
+          const what = [r.skus ? r.skus + ' SKU(s)' : '', r.rows ? r.rows + ' lot row(s)' : '', r.lots ? r.lots + ' lot(s)' : ''].filter(Boolean).join(', ') || 'the bin';
+          $('#vp').innerHTML = r.blocked ? `<div class="note bad">Can't do this: it would make SKUs identical (same brand, model, color, size): ${esc(r.blocked)}. Fix one of those SKUs in Stock first.</div>`
+            : `<div class="note ${r.merge ? 'warn' : ''}">Will change ${what} from "${esc(old)}" to "${esc($('#vn').value.trim())}".${r.merge ? ' That value already exists, so the two will be merged into one.' : ''}</div>`;
+          $('#vgo').classList.toggle('hidden', !!r.blocked);
+          return;
+        }
+        m.remove(); toast('Changed everywhere'); secValues(el);
+      } catch (e) { $('#ve').textContent = e.message; }
+    };
+    $('#vn').oninput = () => { $('#vgo').classList.add('hidden'); $('#vp').innerHTML = ''; };
+    $('#vchk').onclick = () => go(false);
+    $('#vgo').onclick = () => go(true);
+  };
+  $('#vf').onchange = () => { S.valueField = $('#vf').value; secValues(el); };
+  $('#vq').oninput = draw;
+  draw();
 }
 function secPhotos(el) {
   const v = S.settings.settings.photos;
