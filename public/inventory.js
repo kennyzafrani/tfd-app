@@ -299,7 +299,11 @@ async function lotView(el, id) {
         inp.title = bad[f] ? bad[f].join('\n') : conf[f] ? `Catalog has: ${conf[f].catalog}` : '';
         const catVal = p && f !== 'bin_code' ? cellShow(col, p[f]) : '';
         inp.placeholder = c.status === 'existing' && catVal !== '' ? String(catVal) : (f === 'bin_code' && c.status === 'new' && !req.has('bin') ? 'NOT_ASSIGNED' : '');
-        if (f === 'bin_code') { const lock = c.status === 'existing'; inp.disabled = lock; if (lock) { inp.value = ''; inp.placeholder = p?.bin || ''; }
+        if (f === 'bin_code') {
+          const soldOut = c.status === 'existing' && p && p.on_hand === 0, lock = c.status === 'existing' && !soldOut;
+          inp.disabled = lock;
+          if (lock) { inp.value = ''; inp.placeholder = p?.bin || ''; inp.title = `SKU ${p?.sku} is in stock in bin ${p?.bin}. Move it from Bins if needed`; }
+          else if (soldOut && !l.bin_code) { inp.placeholder = 'Pick bin'; inp.classList.add('bad'); inp.title = `SKU ${p.sku} is sold out (was in ${p.bin}). Pick the bin it goes in`; }
           else if (l.bin_code && !(INV.fv.bin || []).includes(l.bin_code)) { inp.classList.add('bad'); inp.title = `Bin "${l.bin_code}" doesn't exist. Pick a bin from the list`; } }
       });
       let h = '';

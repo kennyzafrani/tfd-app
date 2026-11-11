@@ -159,6 +159,22 @@ const ok = (c, m) => { if (!c) throw new Error('FAILED: ' + m); console.log('ok 
   await page.click('#mv'); await page.fill('#ms', '100001'); await page.fill('#mb', 'ZZ-99'); await page.click('#mgo'); await page.waitForTimeout(400);
   ok((await page.textContent('#me')).includes("doesn't exist"), 'unknown bin rejected'); await page.click('[data-close]');
 
+  // sold-out SKU coming back: must pick a bin in the lot, and it moves there
+  await page.goto(BASE + '/#inventory/adjustments'); await page.waitForSelector('#as'); await page.fill('#as', '100002'); await page.waitForSelector('#ago');
+  const oh2 = await page.evaluate(() => document.querySelector('#apanel .note b:last-of-type').textContent);
+  await page.fill('#aqty', oh2); await page.selectOption('#ar', 'lost'); await page.click('#ago'); await page.waitForTimeout(600);
+  const big = await page.locator('#cy').count(); if (big) { await page.click('#cy'); await page.waitForTimeout(600); }
+  await page.goto(BASE + '/#inventory/lots'); await page.waitForSelector('#newr'); await page.click('#newr'); await page.fill('#rs', 'Designer Eyes'); await page.fill('#ri', 'INV-2000'); await page.click('#rgo');
+  await page.waitForSelector('#lgrid');
+  const c1 = page.locator('tr[data-lid]').first();
+  for (const [f, v] of [['upc', '8056597000002'], ['received_qty', '2'], ['unit_cost_cents', '91']]) { const c = c1.locator(`[data-f="${f}"]`); await c.click(); await c.fill(v); await c.press('Tab'); await page.waitForTimeout(400); }
+  await page.click('#matchall'); await page.waitForTimeout(900);
+  ok((await page.textContent('#issues')).includes('is sold out. Pick the bin'), 'sold-out SKU needs a bin pick');
+  const bc = c1.locator('[data-f="bin_code"]'); await bc.click(); await bc.fill('S-07'); await bc.press('Tab'); await page.waitForTimeout(700);
+  await page.click('#confirm'); await page.click('#cy'); await page.waitForSelector('text=Confirmed');
+  await page.goto(BASE + '/#inventory/stock'); await page.waitForSelector('#stbl');
+  ok((await page.locator('tr[data-sku="100002"]').textContent()).includes('S-07'), 'restocked SKU went to the picked bin');
+
   // phone: bottom buttons + ☰ menu
   await page.setViewportSize({ width: 390, height: 844 }); await page.goto(BASE + '/#inventory/stock'); await page.waitForSelector('.mbot');
   ok((await page.locator('.mbot a').count()) === 4 && await page.isVisible('.mbot'), 'bottom bar with 4 buttons');
