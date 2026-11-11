@@ -118,10 +118,29 @@ function route() {
   const allowed = TABS.filter(t => t.can(p));
   let id = location.hash.slice(1).split('/')[0] || allowed[0]?.id;
   if (!allowed.find(t => t.id === id)) id = allowed[0]?.id;
+  const BOTTOM = ['dashboard', 'inventory', 'shows', 'fulfillment'];
+  const ICON = {
+    dashboard: '<path d="M4 13h6V4H4zm0 7h6v-5H4zm10 0h6v-9h-6zm0-16v5h6V4z"/>',
+    inventory: '<path d="M3 7l9-4 9 4v10l-9 4-9-4zm9-2L6 7.6l6 2.7 6-2.7zM5 9.2v6.5l6 2.7v-6.5zm8 9.2l6-2.7V9.2l-6 2.7z"/>',
+    shows: '<path d="M3 6h13a2 2 0 012 2v1.5l3-2v9l-3-2V16a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2z"/>',
+    fulfillment: '<path d="M3 4h12v10h2.5l3.5 3.5V19h-2a2.5 2.5 0 01-5 0H9a2.5 2.5 0 01-5 0H3zm2 2v8h8V6zm13.5 11a1 1 0 100 2 1 1 0 000-2zM6.5 18a1 1 0 100 2 1 1 0 000-2z"/>',
+  };
+  const bottom = allowed.filter(t => BOTTOM.includes(t.id)), menu = allowed.filter(t => !BOTTOM.includes(t.id));
   $('#app').innerHTML = `<div class="shell"><aside class="top"><div class="brand">THE FRAME DROP</div>
     <nav class="tabs">${allowed.map(t => `<a href="#${t.id}" class="${t.id === id ? 'on' : ''}">${t.label}</a>`).join('')}</nav>
-    <div class="who"><span>${esc(S.state.me.name)} · ${esc(S.state.me.role)}</span><button id="lock">Sign out</button></div></aside><main id="main"></main></div>`;
-  $('#lock').onclick = async () => { await signOut(); await boot(); };
+    <div class="who"><span>${esc(S.state.me.name)} · ${esc(S.state.me.role)}</span><button id="lock">Sign out</button></div></aside>
+    <header class="mtop"><button id="mmenu" aria-label="Menu"><span></span><span></span><span></span></button><div class="brand">THE FRAME DROP</div></header>
+    <main id="main"></main>
+    <nav class="mbot" style="grid-template-columns:repeat(${Math.max(bottom.length, 1)},1fr)">${bottom.map(t => `<a href="#${t.id}" class="${t.id === id ? 'on' : ''}">
+      <svg viewBox="0 0 24 24" aria-hidden="true">${ICON[t.id]}</svg><span>${t.label}</span></a>`).join('')}</nav>
+    <div class="mdrawer hidden" id="mdrawer"><div class="mpanel"><div class="brand">THE FRAME DROP</div>
+      ${menu.map(t => `<a href="#${t.id}" class="${t.id === id ? 'on' : ''}">${t.label}</a>`).join('')}
+      ${S.state.me.role === 'admin' ? '<a class="off">Accounting <span class="small">(coming later)</span></a>' : ''}
+      <div class="who"><span>${esc(S.state.me.name)} · ${esc(S.state.me.role)}</span><button id="lock2">Sign out</button></div></div></div></div>`;
+  $('#lock').onclick = $('#lock2').onclick = async () => { await signOut(); await boot(); };
+  const drawer = $('#mdrawer');
+  $('#mmenu').onclick = () => drawer.classList.remove('hidden');
+  drawer.onclick = e => { if (e.target === drawer || e.target.closest('a[href]')) drawer.classList.add('hidden'); };
   const tab = TABS.find(t => t.id === id);
   if (id === 'settings') return renderSettings();
   if (id === 'activity') return renderActivity();

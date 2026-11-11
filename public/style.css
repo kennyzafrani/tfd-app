@@ -171,3 +171,31 @@ label.btn input[type=file] { display: none; }
 .seg button { border: 0; background: none; padding: 7px 14px; cursor: pointer; color: var(--muted); }
 .seg button.on { background: var(--navy); color: #fff; }
 th { color: var(--muted); }
+
+/* phone: app layout — ☰ menu top-left, main tabs as buttons on the bottom */
+.mtop, .mbot, .mdrawer { display: none; }
+@media (max-width: 760px) {
+  .shell { display: block; }
+  .shell > .top { display: none; }
+  .mtop { display: flex; position: sticky; top: 0; z-index: 20; align-items: center; gap: 12px; padding: calc(env(safe-area-inset-top) + 10px) 16px 10px; background: var(--navy); }
+  .mtop .brand { padding: 0; font-size: 0.95rem; }
+  #mmenu { width: 40px; height: 40px; border: 0; border-radius: 10px; background: #ffffff14; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 5px; cursor: pointer; }
+  #mmenu span { display: block; width: 20px; height: 2px; background: #fff; border-radius: 2px; }
+  main { padding: 16px 16px calc(env(safe-area-inset-bottom) + 96px); }
+  .mbot { display: grid; position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; background: var(--navy); padding: 6px 6px calc(env(safe-area-inset-bottom) + 6px); box-shadow: 0 -4px 16px #0003; }
+  .mbot a { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 2px; color: #a9c7b2; text-decoration: none; font-size: 0.72rem; border-radius: 12px; }
+  .mbot a svg { width: 24px; height: 24px; fill: currentColor; }
+  .mbot a.on { color: #fff; background: #88b39533; }
+  .mdrawer:not(.hidden) { display: block; position: fixed; inset: 0; z-index: 30; background: #0008; }
+  .mpanel { position: absolute; top: 0; bottom: 0; left: 0; width: min(80vw, 300px); background: linear-gradient(180deg, var(--navy), var(--side2)); padding: calc(env(safe-area-inset-top) + 22px) 16px 22px; display: flex; flex-direction: column; gap: 8px; box-shadow: 4px 0 24px #0005; }
+  .mpanel .brand { padding: 0 12px 18px; }
+  .mpanel a { color: #c4dccb; text-decoration: none; padding: 14px 16px; border-radius: 12px; font-size: 1.05rem; }
+  .mpanel a.on { color: #fff; background: #88b39533; }
+  .mpanel a.off { opacity: .5; }
+  .mpanel .who { margin-top: auto; }
+  .mpanel .who span { display: inline; }
+  .toast { bottom: calc(env(safe-area-inset-bottom) + 90px); }
+}
+/* bins grid: compact tiles */
+#bgrid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.bincard.empty { opacity: .7; }

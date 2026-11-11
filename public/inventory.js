@@ -299,7 +299,8 @@ async function lotView(el, id) {
         inp.title = bad[f] ? bad[f].join('\n') : conf[f] ? `Catalog has: ${conf[f].catalog}` : '';
         const catVal = p && f !== 'bin_code' ? cellShow(col, p[f]) : '';
         inp.placeholder = c.status === 'existing' && catVal !== '' ? String(catVal) : (f === 'bin_code' && c.status === 'new' && !req.has('bin') ? 'NOT_ASSIGNED' : '');
-        if (f === 'bin_code') { const lock = c.status === 'existing'; inp.disabled = lock; if (lock) { inp.value = ''; inp.placeholder = p?.bin || ''; } }
+        if (f === 'bin_code') { const lock = c.status === 'existing'; inp.disabled = lock; if (lock) { inp.value = ''; inp.placeholder = p?.bin || ''; }
+          else if (l.bin_code && !(INV.fv.bin || []).includes(l.bin_code)) { inp.classList.add('bad'); inp.title = `Bin "${l.bin_code}" doesn't exist. Pick a bin from the list`; } }
       });
       let h = '';
       if (c.status === 'existing') h = `<b class="mono">SKU ${p ? p.sku : l.map_sku}</b> <span class="tag">${l.map_sku ? 'Matched' : 'Same item'}</span>${l.map_sku ? ' <a href="#" data-act="unmatch" class="small">unmatch</a>' : ''}
@@ -503,15 +504,16 @@ async function skuDrawer(sku, done) {
 // ================================================================ Bins
 async function invBins(el) {
   const bins = await rpc('tfd_bins');
-  INV.binQ = INV.binQ || '';
+  INV.binQ = INV.binQ || ''; INV.binShow = INV.binShow || 'all';
   el.innerHTML = `<div class="panel"><div class="head"><div><h2>Bins</h2><p class="muted small">One bin per SKU, each SKU in its own labeled bag. Click a bin to see what's in it and its history.</p></div>
       <div class="row"><button class="btn" id="mv">Move SKU</button><button class="btn primary" id="nb">New bin</button></div></div>
-    <input id="bq" class="inp" style="width:100%;margin-bottom:12px" placeholder="Search bins: bin code, or a SKU / product inside" value="${esc(INV.binQ)}">
+    <div class="row" style="margin-bottom:12px"><div class="seg">${[['all', `All (${bins.length})`], ['used', `With stock (${bins.filter(b => b.skus.length).length})`], ['empty', `Empty (${bins.filter(b => !b.skus.length).length})`]].map(([k, l]) => `<button data-bshow="${k}" class="${INV.binShow === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <input id="bq" class="inp" style="flex:1;min-width:200px" placeholder="Search bins: bin code, or a SKU / product inside" value="${esc(INV.binQ)}"></div>
     <div class="grid" id="bgrid"></div></div>`;
   const draw = () => {
     const lc = INV.binQ.trim().toLowerCase();
-    const rows = bins.filter(b => !lc || b.code.toLowerCase().includes(lc) || b.skus.some(s => [s.sku, s.name, s.brand, s.model, s.color_code, s.color_name, s.lens_size, s.upc].filter(Boolean).join(' ').toLowerCase().includes(lc)));
-    $('#bgrid').innerHTML = rows.map(b => `<div class="panel bincard ${b.code === 'NOT_ASSIGNED' && b.skus.length ? 'warnc' : ''}" data-bin="${esc(b.code)}" style="margin:0">
+    const rows = bins.filter(b => (INV.binShow === 'all' || (INV.binShow === 'empty' ? !b.skus.length : b.skus.length || b.code === 'NOT_ASSIGNED')) && (!lc || b.code.toLowerCase().includes(lc) || b.skus.some(s => [s.sku, s.name, s.brand, s.model, s.color_code, s.color_name, s.lens_size, s.upc].filter(Boolean).join(' ').toLowerCase().includes(lc))));
+    $('#bgrid').innerHTML = rows.map(b => `<div class="panel bincard ${b.code === 'NOT_ASSIGNED' && b.skus.length ? 'warnc' : ''} ${b.skus.length ? '' : 'empty'}" data-bin="${esc(b.code)}" style="margin:0">
         <div class="head" style="margin-bottom:6px"><h2 style="margin:0">${esc(b.code)}</h2><span class="muted small">${b.skus.length} SKU${b.skus.length === 1 ? '' : 's'} · ${b.skus.reduce((a, s) => a + s.on_hand, 0)} units</span></div>
         ${b.note ? `<div class="muted small">${esc(b.note)}</div>` : ''}
         ${b.skus.slice(0, 6).map(s => `<div class="small" style="padding:3px 0;border-bottom:1px solid var(--line)"><span class="mono">${s.sku}</span> · ${esc(prodLabel(s))} <b style="float:right">${s.on_hand}</b></div>`).join('') || '<div class="muted small">Empty</div>'}
@@ -519,6 +521,7 @@ async function invBins(el) {
     el.querySelectorAll('[data-bin]').forEach(c => c.onclick = () => binModal(c.dataset.bin, () => invBins(el)));
   };
   $('#bq').oninput = () => { INV.binQ = $('#bq').value; draw(); };
+  el.querySelectorAll('[data-bshow]').forEach(b => b.onclick = () => { INV.binShow = b.dataset.bshow; el.querySelectorAll('[data-bshow]').forEach(x => x.classList.toggle('on', x === b)); draw(); });
   $('#nb').onclick = () => {
     const m = modal(`<h2>New bin</h2><div class="grid"><label class="f">Code (e.g. A4)<input id="bc" class="inp"></label><label class="f">Note (optional)<input id="bn" class="inp"></label></div>
       <div class="err" id="be"></div><div class="actions"><button class="btn primary" id="bs">Create</button></div>`);
@@ -539,8 +542,8 @@ async function binModal(code, done) {
   const m = modal(`<h2>Bin ${esc(b.code)}</h2>${b.note ? `<p class="muted">${esc(b.note)}</p>` : ''}
     <div class="head"><h3 style="margin:0">In this bin now</h3><div class="row"><button class="btn" id="bmv">Move a SKU in</button><button class="btn primary" id="bver" ${b.skus.length ? '' : 'disabled'}>Verify counts</button></div></div>
     <table><tr><th>SKU</th><th>Product</th><th>UPC</th><th>On hand</th></tr>${b.skus.map(s => `<tr data-sku="${s.sku}" class="click"><td class="mono">${s.sku}</td><td><b>${esc(prodLabel(s))}</b><div class="muted small">${esc(prodSub(s))}</div></td><td class="small mono">${esc(s.upc || '')}</td><td>${s.on_hand}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Empty</td></tr>'}</table>
-    <h3>History</h3><table><tr><th>When</th><th>What</th><th>SKU</th><th>Who</th></tr>
-    ${b.history.map(x => `<tr><td class="small" style="white-space:nowrap">${when(x.at)}</td><td>${x.kind === 'bin_move' ? (x.to === b.code ? `Moved in from ${esc(x.from || 'no bin')}` : `Moved out to ${esc(x.to)}`) : x.kind === 'receipt' ? `Arrived (${x.qty} units, lot)` : x.kind === 'verify' ? 'Count verified' : esc(KIND[x.kind] || x.kind)}</td>
+    <h3>History</h3><p class="muted small">Includes SKUs that sold out of this bin.</p><table><tr><th>When</th><th>What</th><th>SKU</th><th>Who</th></tr>
+    ${b.history.map(x => `<tr><td class="small" style="white-space:nowrap">${when(x.at)}</td><td>${x.kind === 'bin_move' ? (x.to === b.code ? `Moved in from ${esc(x.from || 'no bin')}` : `Moved out to ${esc(x.to)}`) : x.kind === 'receipt' ? `Arrived (${x.qty} units, lot)` : x.kind === 'verify' ? 'Count verified' : x.kind === 'adjust_out' ? `Removed ${-x.qty} (${esc(x.reason || '')})` : x.kind === 'adjust_in' ? `Added ${x.qty} (${esc(x.reason || '')})` : esc(KIND[x.kind] || x.kind)}</td>
       <td><span class="mono">${x.sku}</span> <span class="small">${esc(x.name || '')}</span></td><td>${esc(x.actor)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No history yet.</td></tr>'}</table>`);
   m.querySelector('.modal').style.maxWidth = '780px';
   m.querySelectorAll('[data-sku]').forEach(tr => tr.onclick = () => { m.remove(); skuDrawer(tr.dataset.sku, done); });

@@ -30,7 +30,7 @@ const ok = (c, m) => { if (!c) throw new Error('FAILED: ' + m); console.log('ok 
   // Lot 1 from CSV
   const csv = path.join(OUT, 'lot1.csv');
   fs.writeFileSync(csv, tpl[0] + '\r\n' + [
-    'Designer Eyes,INV-1042,2026-11-10,Ray-Ban,RB3025,001,58,8053672000001,Aviator Classic Gold,Gold/Green,10,10,50.00,163.00,1.5,Bags & Accessories,Sunglasses,,,A4',
+    'Designer Eyes,INV-1042,2026-11-10,Ray-Ban,RB3025,001,58,8053672000001,Aviator Classic Gold,Gold/Green,10,10,50.00,163.00,1.5,Bags & Accessories,Sunglasses,,,Q-01',
     'Designer Eyes,INV-1042,2026-11-10,Prada,PR 17WS,1AB5S0,49,,Prada Symbole,Black,5,4,90.00,430.00,1.2,Bags & Accessories,Sunglasses,,,',
     'Designer Eyes,INV-1042,2026-11-10,Oakley,OO9208,,,,,,2,,70.00,,,,,,,'].join('\r\n'));
   await page.click('#newr'); await page.setInputFiles('#rf', csv); await page.click('#rgo');
@@ -117,13 +117,13 @@ const ok = (c, m) => { if (!c) throw new Error('FAILED: ' + m); console.log('ok 
   // Bins: search + detail + history
   await page.goto(BASE + '/#inventory/bins'); await page.waitForSelector('#bgrid');
   ok((await page.locator('.bincard').first().textContent()).includes('NOT_ASSIGNED'), 'NOT_ASSIGNED first');
-  await page.fill('#bq', 'a4'); ok((await page.locator('.bincard').count()) === 1, 'bin search');
+  await page.fill('#bq', 'q-01'); ok((await page.locator('.bincard').count()) === 1, 'bin search');
   await page.click('.bincard'); await page.waitForSelector('text=History');
   ok((await page.locator('.modal').textContent()).includes('Arrived'), 'bin history shows arrivals');
   await shot(page, '8-bin'); await page.click('[data-close]');
-  await page.fill('#bq', ''); await page.click('#mv'); await page.fill('#ms', '100002'); await page.fill('#mb', 'B2'); await page.click('#mgo'); await page.waitForTimeout(500);
+  await page.fill('#bq', ''); await page.click('#mv'); await page.fill('#ms', '100002'); await page.fill('#mb', 'R-02'); await page.click('#mgo'); await page.waitForTimeout(500);
   await page.fill('#bq', 'NOT_ASSIGNED'); await page.click('.bincard'); await page.waitForSelector('text=History');
-  ok((await page.locator('.modal').textContent()).includes('Moved out to B2'), 'bin history shows move out');
+  ok((await page.locator('.modal').textContent()).includes('Moved out to R-02'), 'bin history shows move out');
   await page.click('[data-close]');
 
   // Versions: restore to right after lot 1 confirm
@@ -152,6 +152,22 @@ const ok = (c, m) => { if (!c) throw new Error('FAILED: ' + m); console.log('ok 
   await shot(page, '11-values'); await page.click('#vgo'); await page.waitForTimeout(600);
   await page.goto(BASE + '/#inventory/stock'); await page.waitForSelector('#stbl');
   ok((await page.textContent('#stbl')).includes('Ray Ban') && !(await page.textContent('#stbl')).includes('Ray-Ban'), 'spelling fixed everywhere');
+
+  // bins: 160 Q-T bins exist; a typed bin that doesn't exist is rejected
+  await page.goto(BASE + '/#inventory/bins'); await page.waitForSelector('#bgrid');
+  ok((await page.textContent('.seg')).includes('All (16'), '160+ bins listed');
+  await page.click('#mv'); await page.fill('#ms', '100001'); await page.fill('#mb', 'ZZ-99'); await page.click('#mgo'); await page.waitForTimeout(400);
+  ok((await page.textContent('#me')).includes("doesn't exist"), 'unknown bin rejected'); await page.click('[data-close]');
+
+  // phone: bottom buttons + ☰ menu
+  await page.setViewportSize({ width: 390, height: 844 }); await page.goto(BASE + '/#inventory/stock'); await page.waitForSelector('.mbot');
+  ok((await page.locator('.mbot a').count()) === 4 && await page.isVisible('.mbot'), 'bottom bar with 4 buttons');
+  await page.click('#mmenu'); await page.waitForSelector('#mdrawer:not(.hidden)');
+  ok((await page.textContent('.mpanel')).includes('Settings') && (await page.textContent('.mpanel')).includes('Activity Log'), 'menu has Settings + Activity Log');
+  await shot(page, '12-phone-menu'); await page.click('.mpanel a[href="#settings"]'); await page.waitForTimeout(500);
+  ok((await page.url()).includes('#settings') && !(await page.isVisible('.mpanel')), 'menu navigates + closes');
+  await page.goto(BASE + '/#inventory/stock'); await page.waitForSelector('#stbl'); await shot(page, '13-phone-stock');
+  await page.setViewportSize({ width: 1400, height: 900 });
 
   // mobile width sanity
   await page.setViewportSize({ width: 390, height: 844 }); await page.goto(BASE + '/#inventory/lots'); await page.waitForSelector('#ltbl'); await page.click('#ltbl tr[data-r]'); await page.waitForSelector('#lgrid');
