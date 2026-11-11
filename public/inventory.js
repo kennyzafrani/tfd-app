@@ -1,33 +1,594 @@
 'use strict';
-// Inventory tab (Phase 2): Receiving, Adjustments, Stock, Lists, Bins. Uses rpc/modal/toast/esc/money from app.js.
+// Inventory tab: Lots (receiving), Adjustments, Stock, Lists, Bins, Versions. Uses rpc/modal/toast/esc/money/when/CFG/token from app.js.
 
-const INV = { sub: 'receiving' };
-const INV_SUBS = [['receiving', 'Receiving'], ['adjustments', 'Adjustments'], ['stock', 'Stock'], ['lists', 'Lists'], ['bins', 'Bins']];
+const INV = { sub: 'lots', fv: {} };
+const INV_SUBS = [['lots', 'Lots'], ['adjustments', 'Adjustments'], ['stock', 'Stock'], ['lists', 'Lists'], ['bins', 'Bins'], ['versions', 'Versions']];
 const REASONS_OUT = ['damaged', 'lost', 'theft', 'personal/sample', 'return to supplier', 'count correction'];
 const dollarsIn = v => { const s = String(v ?? '').replace(/[$,\s]/g, ''); if (s === '') return null; const n = Number(s); if (!Number.isFinite(n) || n < 0) throw new Error('"' + v + '" isn\'t a dollar amount'); return Math.round(n * 100); };
 const intIn = (v, label) => { const s = String(v ?? '').trim(); if (s === '') return null; const n = Number(s); if (!Number.isInteger(n) || n < 0) throw new Error(label + ' must be a whole number'); return n; };
+const numIn = (v, label) => { const s = String(v ?? '').trim(); if (s === '') return null; const n = Number(s); if (!Number.isFinite(n) || n < 0) throw new Error(label + ' must be a number'); return s; };
 const dl = c => c === null || c === undefined ? '' : (c / 100).toFixed(2);
+const prodLabel = p => p.name || [p.brand, p.model].filter(Boolean).join(' ') || 'SKU ' + (p.sku || '');
+const prodSub = p => [p.brand, p.model, p.color_code, p.lens_size].filter(Boolean).join(' · ');
+const S_inv = {};
 
 async function renderInventory() {
-  const sub = location.hash.split('/')[1];
+  let sub = location.hash.split('/')[1];
+  if (sub === 'receiving') sub = 'lots';
   if (sub && INV_SUBS.find(s => s[0] === sub)) INV.sub = sub;
-  if (INV.sub !== 'receiving') INV.receipt = null;
-  S_inv.settings = (await rpc('tfd_settings')).settings;
+  INV.lot = INV.sub === 'lots' ? (Number(location.hash.split('/')[2]) || null) : null;
   $('#main').innerHTML = `<div class="head"><div><h1>Inventory</h1></div></div>
-    <div class="row" style="margin-bottom:16px">${INV_SUBS.map(([k, l]) => `<a class="btn ${k === INV.sub ? 'primary' : ''}" href="#inventory/${k}" style="text-decoration:none">${l}</a>`).join('')}</div>
+    <div class="row" style="margin-bottom:16px">${INV_SUBS.map(([k, l]) => `<a class="btn ${k === INV.sub ? 'primary' : ''}" href="#inventory/${k}">${l}</a>`).join('')}</div>
     <div id="inv"></div>`;
   const el = $('#inv');
-  try { await ({ receiving: invReceiving, adjustments: invAdjust, stock: invStock, lists: invLists, bins: invBins })[INV.sub](el); }
-  catch (e) { el.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; }
+  try {
+    INV.fv = await rpc('tfd_field_values');
+    await ({ lots: invLots, adjustments: invAdjust, stock: invStock, lists: invLists, bins: invBins, versions: invVersions })[INV.sub](el);
+  } catch (e) { el.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; }
 }
 
-// ================================================================ Receiving
-const TEMPLATE_COLS = ['Supplier', 'Invoice #', 'Date', 'Brand', 'Model #', 'Color Code', 'Lens Size', 'Quantity', 'Unit Cost',
-  'Product Name', 'Color Name', 'Retail Price', 'Category', 'Subcategory', 'Weight (oz)', 'UPC', 'Image URL', 'Bin'];
-const COL_KEYS = { 'brand': 'brand', 'model #': 'model', 'model': 'model', 'color code': 'color_code', 'lens size': 'lens_size', 'quantity': 'invoiced_qty',
-  'unit cost': 'unit_cost', 'product name': 'name', 'color name': 'color_name', 'retail price': 'retail', 'category': 'category', 'subcategory': 'subcategory',
-  'weight (oz)': 'weight_oz', 'weight': 'weight_oz', 'upc': 'upc', 'image url': 'image_url', 'bin': 'bin_code', 'supplier': 'supplier', 'invoice #': 'invoice_no', 'date': 'date' };
+// ================================================================ searchable dropdown (pick a past value, or + New)
+const COMBO = { el: null, input: null, items: [], on: -1 };
+function comboClose() { if (COMBO.el) COMBO.el.classList.add('hidden'); COMBO.input = null; }
+function comboOpen(input) {
+  if (!COMBO.el) { COMBO.el = document.createElement('div'); COMBO.el.id = 'combo'; document.body.appendChild(COMBO.el);
+    COMBO.el.addEventListener('mousedown', e => { const d = e.target.closest('[data-i]'); if (!d) return; e.preventDefault(); comboPick(Number(d.dataset.i)); }); }
+  COMBO.input = input;
+  const key = input.dataset.combo, typed = input.value.trim(), lc = typed.toLowerCase();
+  const all = INV.fv[key] || [];
+  const hits = all.filter(v => !lc || String(v).toLowerCase().includes(lc)).slice(0, 60);
+  const exact = all.some(v => String(v).toLowerCase() === lc);
+  COMBO.items = hits.map(v => ({ v, label: esc(v) }));
+  if (typed && !exact) COMBO.items.push({ v: typed, label: `+ New ${esc(key === 'bin' ? 'bin' : 'value')}: “${esc(typed)}”`, isNew: true });
+  if (!COMBO.items.length) return comboClose();
+  COMBO.on = -1;
+  COMBO.el.innerHTML = COMBO.items.map((it, i) => `<div data-i="${i}" class="${it.isNew ? 'new' : ''}">${it.label}</div>`).join('');
+  const r = input.getBoundingClientRect();
+  Object.assign(COMBO.el.style, { left: r.left + 'px', top: (r.bottom + 2) + 'px', minWidth: Math.max(r.width, 180) + 'px' });
+  COMBO.el.classList.remove('hidden');
+}
+function comboPick(i) {
+  const it = COMBO.items[i], input = COMBO.input; if (!it || !input) return;
+  input.value = it.v;
+  const key = input.dataset.combo;
+  if (it.isNew) { INV.fv[key] = [...(INV.fv[key] || []), it.v]; }
+  comboClose();
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+document.addEventListener('focusin', e => { if (e.target.matches && e.target.matches('input[data-combo]')) comboOpen(e.target); });
+document.addEventListener('input', e => { if (e.target.matches && e.target.matches('input[data-combo]')) comboOpen(e.target); });
+document.addEventListener('focusout', e => { if (e.target === COMBO.input) setTimeout(() => { if (document.activeElement !== COMBO.input) comboClose(); }, 120); });
+document.addEventListener('scroll', () => comboClose(), true);
+document.addEventListener('keydown', e => {
+  if (!COMBO.input || e.target !== COMBO.input || COMBO.el.classList.contains('hidden')) return;
+  const n = COMBO.items.length;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); COMBO.on = (COMBO.on + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+    COMBO.el.querySelectorAll('[data-i]').forEach((d, i) => d.classList.toggle('on', i === COMBO.on)); COMBO.el.children[COMBO.on]?.scrollIntoView({ block: 'nearest' }); }
+  else if (e.key === 'Enter' && COMBO.on >= 0) { e.preventDefault(); comboPick(COMBO.on); }
+  else if (e.key === 'Escape') comboClose();
+});
+const comboInput = (id, key, val, extra = '') => `<input id="${id}" class="inp" data-combo="${key}" autocomplete="off" value="${esc(val ?? '')}" ${extra}>`;
 
+// ================================================================ lot photos (private storage, admins only)
+function shrinkImage(file, max = 1600) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => { const k = Math.min(1, max / Math.max(img.width, img.height)); const c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(img.src); c.toBlob(b => b ? res(b) : rej(new Error('Could not read the photo')), 'image/jpeg', 0.85); };
+    img.onerror = () => rej(new Error('Could not read "' + file.name + '" (use JPG or PNG)'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+async function uploadLotPhoto(lotId, file) {
+  const blob = await shrinkImage(file);
+  const path = `lot-${lotId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+  const t = await token();
+  const r = await fetch(`${CFG.url}/storage/v1/object/lot-photos/${path}`, { method: 'POST', headers: { apikey: CFG.anonKey, Authorization: 'Bearer ' + t, 'Content-Type': 'image/jpeg' }, body: blob });
+  if (!r.ok) throw new Error('Photo upload failed: ' + ((await r.json().catch(() => ({}))).message || r.status));
+  await rpc('tfd_lot_photo_add', { p_receipt_id: lotId, p_path: path });
+}
+async function signPhotos(paths) {
+  if (!paths.length) return {};
+  const t = await token();
+  const r = await fetch(`${CFG.url}/storage/v1/object/sign/lot-photos`, { method: 'POST', headers: { apikey: CFG.anonKey, Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' }, body: JSON.stringify({ expiresIn: 3600, paths }) });
+  const d = await r.json().catch(() => []);
+  const out = {}; (Array.isArray(d) ? d : []).forEach(x => { if (x.signedURL) out[x.path] = CFG.url + '/storage/v1' + x.signedURL; });
+  return out;
+}
+async function photosPanel(box, r, reload) {
+  const urls = await signPhotos(r.photos.map(p => p.path)).catch(() => ({}));
+  const req = (r.required || []).includes('lot_photo');
+  box.innerHTML = `<div class="head" style="margin-bottom:8px"><div><h2 style="margin:0">Lot photos ${req ? '<span class="req">*</span>' : ''}</h2>
+      <div class="muted small">Internal only: the box it came in, the invoice, what the product looked like. Not used in listings.</div></div>
+      <label class="btn">Add photos<input type="file" id="phf" accept="image/*" multiple class="hidden"></label></div>
+    <div class="thumbs">${r.photos.map(p => `<div class="ph"><img src="${esc(urls[p.path] || '')}" alt="Lot photo" data-big="${esc(urls[p.path] || '')}">
+      <button class="x" data-phdel="${p.id}" title="Remove photo">×</button></div>`).join('') || '<span class="muted small">No photos yet.</span>'}</div>`;
+  box.querySelector('#phf').onchange = async e => {
+    const files = [...e.target.files]; if (!files.length) return;
+    toast(`Uploading ${files.length} photo(s)…`);
+    try { for (const f of files) await uploadLotPhoto(r.id, f); toast('Photos added'); reload(); } catch (err) { toast(err.message, true); }
+  };
+  box.querySelectorAll('[data-big]').forEach(i => i.onclick = () => { const m = modal(`<img src="${i.dataset.big}" alt="Lot photo" style="width:100%;border-radius:8px">`); m.querySelector('.modal').style.maxWidth = '900px'; });
+  box.querySelectorAll('[data-phdel]').forEach(b => b.onclick = async () => {
+    if (!confirm('Remove this photo from the lot?')) return;
+    try { await rpc('tfd_lot_photo_delete', { p_id: Number(b.dataset.phdel) }); reload(); } catch (e) { toast(e.message, true); }
+  });
+}
+
+// ================================================================ Lots
+const TEMPLATE_COLS = ['Supplier', 'Invoice #', 'Date', 'Brand', 'Model #', 'Color Code', 'Lens Size', 'UPC', 'Product Name', 'Color Name',
+  'Invoiced Qty', 'Received Qty', 'Unit Cost', 'Retail Price', 'Weight (oz)', 'Category', 'Subcategory', 'Specs', 'Image URL', 'Bin'];
+const COL_KEYS = { 'supplier': 'supplier', 'invoice #': 'invoice_no', 'invoice': 'invoice_no', 'date': 'date', 'brand': 'brand', 'model #': 'model', 'model': 'model',
+  'color code': 'color_code', 'lens size': 'lens_size', 'upc': 'upc', 'product name': 'name', 'color name': 'color_name', 'invoiced qty': 'invoiced_qty', 'quantity': 'invoiced_qty',
+  'received qty': 'received_qty', 'unit cost': 'unit_cost', 'retail price': 'retail', 'weight (oz)': 'weight_oz', 'weight': 'weight_oz', 'category': 'category',
+  'subcategory': 'subcategory', 'specs': 'specs', 'image url': 'image_url', 'bin': 'bin_code' };
+function templateToLines(rows) {
+  if (!rows.length) throw new Error('The file is empty');
+  const map = rows[0].map(h => COL_KEYS[h.trim().toLowerCase()]);
+  if (!map.some(Boolean)) throw new Error('No TFD template columns found. Download the template and convert the invoice into it.');
+  const meta = {}, lines = [];
+  rows.slice(1).forEach((r, i) => {
+    const o = {}; map.forEach((k, j) => { if (k) o[k] = (r[j] ?? '').trim(); });
+    if (o.supplier && !meta.supplier) meta.supplier = o.supplier;
+    if (o.invoice_no && !meta.invoice_no) meta.invoice_no = o.invoice_no;
+    if (o.date && !meta.date) meta.date = o.date;
+    const { supplier, invoice_no, date, ...rest } = o;
+    if (!Object.values(rest).some(Boolean)) return;
+    try {
+      lines.push({ brand: o.brand, model: o.model, color_code: o.color_code, lens_size: o.lens_size, upc: o.upc, name: o.name, color_name: o.color_name,
+        invoiced_qty: intIn(o.invoiced_qty, 'Invoiced qty'), received_qty: intIn(o.received_qty, 'Received qty'), unit_cost_cents: dollarsIn(o.unit_cost),
+        retail_cents: dollarsIn(o.retail), weight_oz: numIn(o.weight_oz, 'Weight'), category: o.category, subcategory: o.subcategory, specs: o.specs, image_url: o.image_url, bin_code: o.bin_code });
+    } catch (e) { throw new Error('Row ' + (i + 2) + ': ' + e.message); }
+  });
+  return { meta, lines };
+}
+
+async function invLots(el) {
+  if (INV.lot) return lotView(el, INV.lot);
+  const rs = await rpc('tfd_receipts');
+  const q = INV.lotQ = INV.lotQ || { q: '', supplier: '', invoice: '', from: '', to: '', skuMin: '', skuMax: '', costMin: '', costMax: '', status: '' };
+  const suppliers = [...new Set(rs.map(r => r.supplier).filter(Boolean))].sort();
+  el.innerHTML = `<div class="panel"><div class="head"><div><h2>Lots</h2><div class="muted small">Each inventory upload is a lot. Nothing changes stock until you confirm the count.</div></div><div class="row">
+      <button class="btn" id="tpl">Download template</button><button class="btn primary" id="newr">New lot</button></div></div>
+    <div class="row" style="margin-bottom:10px"><input id="lq" class="inp" style="flex:1;min-width:220px" placeholder="Search anything in a lot: name, supplier, invoice, brand, model, UPC, SKU…" value="${esc(q.q)}">
+      <button class="btn" id="lfx">Clear filters</button></div>
+    <div class="grid filters">
+      <label class="f">Supplier<select id="lf_supplier" class="inp"><option value="">All</option>${suppliers.map(s => `<option ${s === q.supplier ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></label>
+      <label class="f">Invoice #<input id="lf_invoice" class="inp" value="${esc(q.invoice)}"></label>
+      <label class="f">Date from<input id="lf_from" type="date" class="inp" value="${esc(q.from)}"></label><label class="f">Date to<input id="lf_to" type="date" class="inp" value="${esc(q.to)}"></label>
+      <label class="f">SKUs from<input id="lf_skuMin" type="number" min="0" class="inp" value="${esc(q.skuMin)}"></label><label class="f">SKUs to<input id="lf_skuMax" type="number" min="0" class="inp" value="${esc(q.skuMax)}"></label>
+      <label class="f">Cost from ($)<input id="lf_costMin" type="number" min="0" step="0.01" class="inp" value="${esc(q.costMin)}"></label><label class="f">Cost to ($)<input id="lf_costMax" type="number" min="0" step="0.01" class="inp" value="${esc(q.costMax)}"></label>
+      <label class="f">Status<select id="lf_status" class="inp">${[['', 'All'], ['draft', 'Draft'], ['confirmed', 'Confirmed'], ['undone', 'Undone']].map(([v, l]) => `<option value="${v}" ${v === q.status ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
+    <div style="overflow-x:auto"><table id="ltbl"></table></div></div>`;
+  const draw = () => {
+    const num = (v, f) => v === '' ? null : f(Number(v));
+    const lc = q.q.trim().toLowerCase();
+    const rows = rs.filter(r => (!lc || (r.search || '').toLowerCase().includes(lc)) && (!q.supplier || r.supplier === q.supplier)
+      && (!q.invoice || (r.invoice_no || '').toLowerCase().includes(q.invoice.toLowerCase())) && (!q.from || r.received_date >= q.from) && (!q.to || r.received_date <= q.to)
+      && (num(q.skuMin, x => r.skus >= x) ?? true) && (num(q.skuMax, x => r.skus <= x) ?? true)
+      && (num(q.costMin, x => r.cost_cents >= x * 100) ?? true) && (num(q.costMax, x => r.cost_cents <= x * 100) ?? true) && (!q.status || r.status === q.status));
+    $('#ltbl').innerHTML = `<tr><th>Lot name</th><th>Supplier</th><th>Invoice</th><th>Date</th><th>SKUs</th><th>Units</th><th>Cost</th><th>Photos</th><th>Status</th></tr>
+      ${rows.map(r => `<tr data-r="${r.id}" class="click"><td><b>${esc(r.name)}</b></td><td>${esc(r.supplier || '—')}</td><td>${esc(r.invoice_no || '—')}</td><td style="white-space:nowrap">${esc(r.received_date)}</td>
+        <td>${r.skus}</td><td>${r.units}</td><td class="mono">${money(r.cost_cents)}</td><td>${r.photos || ''}</td>
+        <td>${r.status === 'draft' ? '<span class="tag">Draft</span>' : r.status === 'undone' ? '<span class="tag off">Undone</span>' : 'Confirmed'}${r.discrepancies ? ` <span class="tag off">${r.discrepancies} count diff</span>` : ''}</td></tr>`).join('')
+        || `<tr><td colspan="9" class="muted">${rs.length ? 'No lots match.' : 'No lots yet. Click New lot.'}</td></tr>`}`;
+    el.querySelectorAll('[data-r]').forEach(tr => tr.onclick = () => { location.hash = '#inventory/lots/' + tr.dataset.r; });
+  };
+  $('#lq').oninput = () => { q.q = $('#lq').value; draw(); };
+  ['supplier', 'invoice', 'from', 'to', 'skuMin', 'skuMax', 'costMin', 'costMax', 'status'].forEach(k => { $('#lf_' + k).oninput = $('#lf_' + k).onchange = () => { q[k] = $('#lf_' + k).value; draw(); }; });
+  $('#lfx').onclick = () => { INV.lotQ = null; invLots(el); };
+  $('#tpl').onclick = () => downloadCSV('TFD Lot Template.csv', TEMPLATE_COLS, []);
+  $('#newr').onclick = () => {
+    const m = modal(`<h2>New lot</h2><div class="grid">
+      <label class="f">Supplier${comboInput('rs', 'supplier', '')}</label>
+      <label class="f">Invoice #<input id="ri" class="inp"></label>
+      <label class="f">Date received<input id="rd" class="inp" type="date" value="${new Date().toLocaleDateString('en-CA')}"></label></div>
+      <label class="f" style="margin-top:12px">TFD template CSV (leave empty to type the rows in yourself)<input id="rf" type="file" accept=".csv"></label>
+      <p class="muted small">The lot is named Supplier · Invoice # · Date automatically. You can rename it.</p>
+      <div class="err" id="re"></div><div class="actions"><button class="btn primary" id="rgo">Create lot</button></div>`);
+    m.querySelector('#rgo').onclick = async () => {
+      try {
+        let lines = [], meta = {}, fname = null;
+        const f = $('#rf').files[0];
+        if (f) { ({ meta, lines } = templateToLines(parseCSV(await f.text()))); fname = f.name; }
+        const id = await rpc('tfd_receipt_create', { p_supplier: $('#rs').value.trim() || meta.supplier || '', p_invoice_no: $('#ri').value.trim() || meta.invoice_no || '',
+          p_date: $('#rd').value || meta.date || null, p_lines: lines.length ? lines : [{}], p_source_file: fname });
+        m.remove(); location.hash = '#inventory/lots/' + id;
+      } catch (e) { $('#re').textContent = e.message; }
+    };
+  };
+  draw();
+}
+
+// [key, header, type, required-key, width]
+const LOT_COLS = [
+  ['brand', 'Brand', 'combo', 'brand', 130], ['model', 'Model #', 'combo', 'model', 120], ['color_code', 'Color code', 'combo', 'color_code', 100], ['lens_size', 'Lens size', 'combo', 'lens_size', 80],
+  ['upc', 'UPC', 'text', 'upc', 140], ['name', 'Product name', 'combo', 'name', 210], ['color_name', 'Color name', 'combo', 'color_name', 130],
+  ['invoiced_qty', 'Invoiced', 'int', 'invoiced_qty', 80], ['received_qty', 'Received', 'int', 'received_qty', 80], ['unit_cost_cents', 'Unit cost $', 'money', 'cost', 95],
+  ['retail_cents', 'Retail $', 'money', 'retail', 95], ['weight_oz', 'Weight oz', 'num', 'weight', 85], ['category', 'Category', 'combo', 'category', 160],
+  ['subcategory', 'Subcategory', 'combo', 'subcategory', 130], ['specs', 'Specs', 'combo', 'specs', 150], ['image_url', 'Listing image URL', 'text', 'image_url', 190],
+  ['bin_code', 'Bin', 'combo', 'bin', 120]];
+const comboKey = k => k === 'bin_code' ? 'bin' : k;
+const cellShow = (c, v) => c[2] === 'money' ? dl(v) : (v ?? '');
+function cellRead(c, raw) {
+  if (c[2] === 'money') return dollarsIn(raw);
+  if (c[2] === 'int') return intIn(raw, c[1]);
+  if (c[2] === 'num') return numIn(raw, c[1]);
+  const s = String(raw).trim(); return s === '' ? null : (c[0] === 'bin_code' ? s.toUpperCase() : s);
+}
+function lineFields(l) {
+  const o = {}; LOT_COLS.forEach(([k]) => o[k] = l[k]);
+  return { ...o, lists: l.lists || [], map_sku: l.map_sku, confirmed_new: l.confirmed_new, update_catalog: l.update_catalog };
+}
+const candText = c => `${esc(c.sku)} · ${esc(prodSub(c) || c.name || '')}${c.upc ? ' · UPC ' + esc(c.upc) : ''} · ${c.on_hand} on hand`;
+
+async function lotView(el, id) {
+  const [r, fv] = await Promise.all([rpc('tfd_receipt', { p_id: id }), rpc('tfd_field_values')]);
+  INV.fv = fv;
+  const draft = r.status === 'draft';
+  const req = new Set(r.required || []); req.add('cost');
+  el.innerHTML = `<div class="panel"><div class="head"><div style="flex:1;min-width:0"><a href="#inventory/lots" id="back" class="small">← All lots</a>
+      <h2 style="margin-top:6px" id="lname">${esc(r.name)} ${draft ? '<span class="tag">Draft</span>' : r.status === 'undone' ? '<span class="tag off">Undone</span>' : '<span class="tag">Confirmed</span>'}</h2></div>
+      <div class="row">${draft ? '<button class="btn danger" id="discard">Discard draft</button>' : '<button class="btn" id="labels">Print SKU labels</button>'}</div></div>
+    <div class="grid">
+      <label class="f">Lot name<input id="hn" class="inp" value="${esc(r.name)}"></label>
+      <label class="f"><span>Supplier ${req.has('supplier') ? '<span class="req">*</span>' : ''}</span>${comboInput('hs', 'supplier', r.supplier, draft ? '' : 'disabled')}</label>
+      <label class="f"><span>Invoice # ${req.has('invoice_no') ? '<span class="req">*</span>' : ''}</span><input id="hi" class="inp" value="${esc(r.invoice_no || '')}" ${draft ? '' : 'disabled'}></label>
+      <label class="f"><span>Date received ${req.has('received_date') ? '<span class="req">*</span>' : ''}</span><input id="hd" class="inp" type="date" value="${esc(r.received_date)}" ${draft ? '' : 'disabled'}></label></div>
+    <p class="muted small">${r.source_file ? `Imported from ${esc(r.source_file)} · ` : ''}Started by ${esc(r.created_by)}${r.confirmed_at ? ` · confirmed by ${esc(r.confirmed_by)} ${when(r.confirmed_at)}` : ''}</p></div>
+    <div class="panel" id="photos"></div>
+    <div class="panel"><div class="head"><div><h2 style="margin:0">SKUs <span class="muted small">(${r.lines.length} row${r.lines.length === 1 ? '' : 's'})</span></h2>
+        <div class="muted small">${draft ? 'Type straight into the grid. Scroll right for every field. <span class="req">*</span> = required. Red = needs fixing.' : 'Everything entered for this lot, as confirmed.'}</div></div>
+      ${draft ? '<div class="row"><button class="btn hidden" id="matchall"></button><button class="btn" id="addl">Add row</button></div>' : ''}</div>
+      <div class="lotwrap"><table class="lot" id="lgrid"></table></div>
+      ${draft ? '<div id="issues"></div>' : ''}</div>`;
+  const reload = () => lotView(el, id);
+  photosPanel($('#photos'), r, reload);
+  let nameEdited = false;
+  $('#hn').oninput = () => { nameEdited = true; };
+
+  if (!draft) {
+    $('#hn').onchange = async () => { try { const x = await rpc('tfd_receipt_header', { p_id: id, p_supplier: r.supplier, p_invoice_no: r.invoice_no, p_date: r.received_date, p_name: $('#hn').value }); toast('Renamed'); $('#lname').firstChild.textContent = x.name + ' '; } catch (e) { toast(e.message, true); } };
+    $('#labels').onclick = () => printLabels(r.lines.filter(l => l.result_sku).map(l => ({ sku: l.result_sku, name: l.name || `${l.brand || ''} ${l.model || ''}`, qty: l.received_qty })));
+    $('#lgrid').innerHTML = `<tr><th class="stk0">#</th><th class="stk1">SKU</th>${LOT_COLS.map(c => `<th>${c[1]}</th>`).join('')}</tr>
+      ${r.lines.map(l => `<tr><td class="stk0">${l.line_no}</td><td class="stk1">${l.result_sku ? `<a href="#" data-sku="${l.result_sku}" class="mono"><b>${l.result_sku}</b></a>` : '<span class="muted small">no SKU (0 received)</span>'}
+        ${l.received_qty !== null && l.invoiced_qty !== null && l.received_qty !== l.invoiced_qty ? `<div class="small" style="color:var(--bad)">${l.received_qty < l.invoiced_qty ? 'Short' : 'Over'} by ${Math.abs(l.received_qty - l.invoiced_qty)}</div>` : ''}</td>
+        ${LOT_COLS.map(c => `<td class="ro">${esc(c[2] === 'money' ? (l[c[0]] === null ? '' : money(l[c[0]])) : (l[c[0]] ?? ''))}</td>`).join('')}</tr>`).join('')}`;
+    el.querySelectorAll('[data-sku]').forEach(a => a.onclick = e => { e.preventDefault(); skuDrawer(a.dataset.sku, reload); });
+    return;
+  }
+
+  // ---- draft: editable grid
+  const lines = r.lines;
+  const saveHeader = async () => {
+    try { const x = await rpc('tfd_receipt_header', { p_id: id, p_supplier: $('#hs').value, p_invoice_no: $('#hi').value, p_date: $('#hd').value, p_name: nameEdited ? $('#hn').value : null });
+      $('#hn').value = x.name; $('#lname').firstChild.textContent = x.name + ' '; nameEdited = false; refresh(); } catch (e) { toast(e.message, true); }
+  };
+  ['#hn', '#hs', '#hi', '#hd'].forEach(s => $(s).addEventListener('change', saveHeader));
+
+  $('#lgrid').innerHTML = `<tr><th class="stk0">#</th><th class="stk1">Match</th>${LOT_COLS.map(c => `<th>${c[1]}${req.has(c[3]) ? ' <span class="req">*</span>' : ''}</th>`).join('')}<th></th></tr>
+    ${lines.map(l => `<tr data-lid="${l.id}"><td class="stk0">${l.line_no}</td><td class="stk1 mcell"></td>
+      ${LOT_COLS.map(c => `<td><input class="cell" style="width:${c[4]}px" data-f="${c[0]}" ${c[2] === 'combo' ? `data-combo="${comboKey(c[0])}" autocomplete="off"` : ''}
+        ${['int', 'num', 'money'].includes(c[2]) ? 'inputmode="decimal"' : ''} value="${esc(cellShow(c, l[c[0]]))}"></td>`).join('')}
+      <td><button class="btn sm danger" data-delrow="${l.id}" title="Delete row">×</button></td></tr>`).join('')}`;
+
+  let chain = Promise.resolve();
+  const refresh = async () => {
+    const x = await rpc('tfd_receipt', { p_id: id });
+    if (x.lines.length !== lines.length) return reload();
+    x.lines.forEach(nl => { const i = lines.findIndex(l => l.id === nl.id); if (i >= 0) lines[i] = nl; });
+    r.issues = x.issues; decorate();
+  };
+  const save = (line, patch) => {
+    Object.assign(line, patch);
+    chain = chain.then(() => rpc('tfd_receipt_line_save', { p_receipt_id: id, p_line_id: line.id, p_fields: lineFields(line) })).then(refresh).catch(e => toast(e.message, true));
+    return chain;
+  };
+  const decorate = () => {
+    lines.forEach(l => {
+      const tr = el.querySelector(`tr[data-lid="${l.id}"]`); if (!tr) return;
+      const c = l.check, p = c.product, bad = {}, rowMsgs = [];
+      c.problems.forEach(pr => { if (pr.f && tr.querySelector(`[data-f="${pr.f}"]`)) (bad[pr.f] = bad[pr.f] || []).push(pr.m); else rowMsgs.push(pr.m); });
+      const conf = Object.fromEntries((c.conflicts || []).map(x => [x.field, x]));
+      tr.querySelectorAll('.cell').forEach(inp => {
+        const f = inp.dataset.f, col = LOT_COLS.find(x => x[0] === f);
+        inp.classList.toggle('bad', !!bad[f]); inp.classList.toggle('warn', !bad[f] && !!conf[f]);
+        inp.title = bad[f] ? bad[f].join('\n') : conf[f] ? `Catalog has: ${conf[f].catalog}` : '';
+        const catVal = p && f !== 'bin_code' ? cellShow(col, p[f]) : '';
+        inp.placeholder = c.status === 'existing' && catVal !== '' ? String(catVal) : (f === 'bin_code' && c.status === 'new' && !req.has('bin') ? 'NOT_ASSIGNED' : '');
+        if (f === 'bin_code') { const lock = c.status === 'existing'; inp.disabled = lock; if (lock) { inp.value = ''; inp.placeholder = p?.bin || ''; } }
+      });
+      let h = '';
+      if (c.status === 'existing') h = `<b class="mono">SKU ${p ? p.sku : l.map_sku}</b> <span class="tag">${l.map_sku ? 'Matched' : 'Same item'}</span>${l.map_sku ? ' <a href="#" data-act="unmatch" class="small">unmatch</a>' : ''}
+        ${c.conflicts.length ? `<div class="small" style="color:var(--warn)">Differs from catalog: ${c.conflicts.map(x => esc(x.field.replace(/_cents|_oz/, '').replace(/_/g, ' '))).join(', ')}</div>
+          <label class="small"><input type="checkbox" data-act="updcat" ${l.update_catalog ? 'checked' : ''}> Update the catalog with this row</label>` : ''}`;
+      else if (c.status === 'new') h = `<span class="tag claude">NEW SKU</span>${l.confirmed_new ? ' <a href="#" data-act="unnew" class="small">undo</a>' : ''}`;
+      else h = c.candidates.map(x => `<div class="cand"><button class="btn sm primary" data-act="match" data-sku="${x.sku}">Match ${x.sku}</button> <span class="small"><b>${esc(x.reason)}</b>: ${candText(x)}</span></div>`).join('')
+        + (c.status === 'suggest' ? '<button class="btn sm" data-act="new">It\'s a new SKU</button>' : '');
+      if (rowMsgs.length) h += `<div class="small" style="color:var(--bad)">${rowMsgs.map(esc).join('<br>')}</div>`;
+      tr.querySelector('.mcell').innerHTML = h;
+    });
+    const ups = lines.filter(l => l.check.status === 'suggest' && l.check.candidates[0]?.reason === 'Same UPC').length;
+    const ma = $('#matchall'); ma.classList.toggle('hidden', !ups); ma.textContent = `Match all by UPC (${ups})`;
+    const units = lines.reduce((a, l) => a + (l.received_qty ?? l.invoiced_qty ?? 0), 0), cost = lines.reduce((a, l) => a + (l.received_qty ?? l.invoiced_qty ?? 0) * (l.unit_cost_cents || 0), 0);
+    const n = r.issues.length;
+    $('#issues').innerHTML = `<div class="actions" style="justify-content:space-between;align-items:flex-start"><div><b>${units}</b> units · <b>${money(cost)}</b> at cost
+        ${n ? `<div class="note bad" style="margin-top:10px"><b>Can't confirm yet. ${n} thing${n === 1 ? '' : 's'} to fix:</b><ul style="margin:6px 0 0 18px;padding:0">${r.issues.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}</div>
+      <button class="btn primary" id="confirm" ${n ? 'disabled' : ''}>${n ? `Confirm count (${n} left)` : 'Confirm count'}</button></div>`;
+    $('#confirm').onclick = confirmLot;
+  };
+  const grid = $('#lgrid');
+  grid.addEventListener('change', e => {
+    const inp = e.target; if (!inp.classList.contains('cell')) return;
+    const l = lines.find(x => x.id === Number(inp.closest('tr').dataset.lid)), col = LOT_COLS.find(c => c[0] === inp.dataset.f);
+    let v; try { v = cellRead(col, inp.value); } catch (err) { inp.classList.add('bad'); inp.title = err.message; return toast(err.message, true); }
+    if (v === (l[col[0]] ?? null) || (col[2] === 'num' && Number(v) === Number(l[col[0]]) && v !== null)) return;
+    save(l, { [col[0]]: v });
+  });
+  grid.addEventListener('click', e => {
+    const a = e.target.closest('[data-act]'), del = e.target.closest('[data-delrow]');
+    if (del) { const l = lines.find(x => x.id === Number(del.dataset.delrow));
+      if (!confirm(`Delete row ${l.line_no}?`)) return;
+      return chain = chain.then(() => rpc('tfd_receipt_line_delete', { p_receipt_id: id, p_line_id: l.id })).then(reload).catch(err => toast(err.message, true)); }
+    if (!a) return;
+    if (a.tagName === 'A') e.preventDefault();
+    const l = lines.find(x => x.id === Number(a.closest('tr').dataset.lid));
+    ({ match: () => save(l, { map_sku: a.dataset.sku, confirmed_new: false }), new: () => save(l, { confirmed_new: true, map_sku: null }),
+      unmatch: () => save(l, { map_sku: null }), unnew: () => save(l, { confirmed_new: false }), updcat: () => save(l, { update_catalog: a.checked }) })[a.dataset.act]();
+  });
+  $('#addl').onclick = () => { chain = chain.then(() => rpc('tfd_receipt_line_save', { p_receipt_id: id, p_line_id: null, p_fields: {} })).then(reload).catch(err => toast(err.message, true)); };
+  $('#matchall').onclick = () => { chain = chain.then(() => rpc('tfd_lot_match_all', { p_id: id })).then(x => { toast(`Matched ${x.matched} row(s)`); return reload(); }).catch(err => toast(err.message, true)); };
+  $('#discard').onclick = () => {
+    const m = modal(`<h2>Discard this draft?</h2><p>Lot "${esc(r.name)}" and its ${lines.length} row(s) will be deleted. Stock was never changed. (It stays restorable from Versions.)</p><div class="actions"><button class="btn danger" id="dy">Discard</button></div>`);
+    m.querySelector('#dy').onclick = async () => { try { await rpc('tfd_receipt_discard', { p_id: id }); m.remove(); location.hash = '#inventory/lots'; } catch (e) { toast(e.message, true); } };
+  };
+  const confirmLot = async () => {
+    await chain;
+    const units = lines.reduce((a, l) => a + (l.received_qty ?? l.invoiced_qty ?? 0), 0), cost = lines.reduce((a, l) => a + (l.received_qty ?? l.invoiced_qty ?? 0) * (l.unit_cost_cents || 0), 0);
+    const newN = lines.filter(l => l.check.status === 'new' && (l.received_qty ?? l.invoiced_qty ?? 0) > 0).length;
+    const short = lines.filter(l => l.received_qty !== null && l.invoiced_qty !== null && l.received_qty !== l.invoiced_qty);
+    const unbinned = lines.filter(l => l.check.status === 'new' && !l.bin_code).length;
+    const m = modal(`<h2>Confirm count</h2><p>Adds <b>${units}</b> units (<b>${money(cost)}</b> at cost) to stock${newN ? ` and creates <b>${newN}</b> new SKU(s)` : ''}.</p>
+      ${unbinned ? `<div class="note warn">${unbinned} new SKU(s) have no bin and will go to <b>NOT_ASSIGNED</b>.</div>` : ''}
+      ${short.length ? `<div class="note warn">${short.length} row(s) differ from the invoice. They'll be flagged for a supplier claim.</div>` : ''}
+      <div class="err" id="ce" style="white-space:pre-line"></div><div class="actions"><button class="btn primary" id="cy">Confirm count</button></div>`);
+    m.querySelector('#cy').onclick = async () => {
+      try { const res = await rpc('tfd_receipt_confirm', { p_id: id }); m.remove(); toast(`Added ${res.units} units · ${res.new_skus} new SKU(s)`); reload(); }
+      catch (e) { m.querySelector('#ce').textContent = e.message; }
+    };
+  };
+  decorate();
+}
+
+// ================================================================ Adjustments
+async function invAdjust(el) {
+  const [stock, act] = await Promise.all([rpc('tfd_stock'), rpc('tfd_activity', { p_filters: { tab: 'Inventory' } })]);
+  const recent = act.rows.filter(r => r.action === 'adjust_out' || r.action === 'adjust_in').slice(0, 25);
+  const A = INV.adj = INV.adj || { q: '', sku: '', sel: null };
+  el.innerHTML = `<div class="panel"><h2>Find the product</h2>
+      <div class="grid"><label class="f">SKU<input id="as" class="inp mono" inputmode="numeric" placeholder="6 digits" value="${esc(A.sku)}"></label>
+        <label class="f" style="grid-column:span 2">Search anything (name, brand, model, color, size, UPC, bin…)<input id="aq" class="inp" placeholder="e.g. 01, aviator, RB3025, A4" value="${esc(A.q)}"></label></div>
+      <div id="ares" style="margin-top:10px;max-height:320px;overflow:auto"></div></div>
+    <div class="panel" id="apanel"></div>
+    <div class="panel"><h2>Customer returns</h2><p class="muted">Returns are entered by order number, so they arrive with Shows, once orders exist in the app.</p></div>
+    <div class="panel"><h2>Recent adjustments</h2><table><tr><th>When</th><th>Who</th><th>What</th></tr>
+      ${recent.map(r => `<tr><td class="small" style="white-space:nowrap">${when(r.at)}</td><td>${esc(r.actor)}</td><td><span style="color:var(--${r.action === 'adjust_out' ? 'bad' : 'ok'})">${esc(r.summary)}</span>${r.reason ? `<div class="muted small">${esc(r.reason)}</div>` : ''}${r.undone_by ? ' <span class="tag off">Undone</span>' : ''}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">None yet.</td></tr>'}
+    </table><p class="muted small">To undo one, use the Activity Log or Versions.</p></div>`;
+  const hay = s => [s.sku, s.name, s.brand, s.model, s.color_code, s.color_name, s.lens_size, s.upc, s.category, s.subcategory, s.specs, s.bin, ...(s.lots || [])].filter(Boolean).join(' ').toLowerCase();
+  const results = () => {
+    const sk = A.sku.trim(), lc = A.q.trim().toLowerCase();
+    if (!sk && !lc) { $('#ares').innerHTML = '<p class="muted small">Type a SKU, or search by anything about the product.</p>'; return; }
+    const rows = stock.filter(s => (!sk || s.sku.includes(sk)) && (!lc || hay(s).includes(lc))).slice(0, 100);
+    if (sk.length === 6 && rows.length === 1 && A.sel !== rows[0].sku) { A.sel = rows[0].sku; panel(); }
+    $('#ares').innerHTML = `<table><tr><th>SKU</th><th>Product</th><th>UPC</th><th>Bin</th><th>On hand</th></tr>
+      ${rows.map(s => `<tr data-pick="${s.sku}" class="click ${s.sku === A.sel ? 'sel' : ''}"><td class="mono">${s.sku}</td><td><b>${esc(prodLabel(s))}</b><div class="muted small">${esc(prodSub(s))}${s.color_name ? ' · ' + esc(s.color_name) : ''}</div></td>
+        <td class="small mono">${esc(s.upc || '')}</td><td>${esc(s.bin || '')}</td><td>${s.on_hand}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nothing matches.</td></tr>'}</table>`;
+    el.querySelectorAll('[data-pick]').forEach(tr => tr.onclick = () => { A.sel = tr.dataset.pick; results(); panel(); });
+  };
+  const panel = () => {
+    const s = stock.find(x => x.sku === A.sel);
+    const last = INV.lastAdj ? `<div class="banner ${INV.lastAdj.dir}">${esc(INV.lastAdj.text)}</div>` : '';
+    if (!s) { $('#apanel').innerHTML = `${last}<h2>Adjust stock</h2><p class="muted">Pick a product above.</p>`; return; }
+    $('#apanel').innerHTML = `${last}<h2>Adjust stock</h2>
+      <div class="note"><b class="mono">${s.sku}</b> · <b>${esc(prodLabel(s))}</b> · ${esc(prodSub(s))} · bin ${esc(s.bin || '—')} · <b>${s.on_hand}</b> on hand</div>
+      <div class="grid"><label class="f">Change<select id="ad" class="inp"><option value="out">Remove units</option><option value="in">Add units</option></select></label>
+        <label class="f">Quantity<input id="aqty" class="inp" type="number" min="1" value="1"></label>
+        <label class="f">Reason<select id="ar" class="inp">${REASONS_OUT.map(r => `<option>${r}</option>`).join('')}</select></label>
+        <label class="f">Note (optional)<input id="an" class="inp"></label></div>
+      <div class="err" id="ae"></div><div class="actions"><button class="btn primary" id="ago">Save adjustment</button></div>
+      <p class="muted small">Removals take the oldest cost first (FIFO). Additions come in at the most recent cost.</p>`;
+    $('#ad').onchange = () => { $('#ar').innerHTML = ($('#ad').value === 'out' ? REASONS_OUT : ['count correction', 'found']).map(r => `<option>${r}</option>`).join(''); };
+    const go = async confirm => {
+      try {
+        const dir = $('#ad').value, qty = intIn($('#aqty').value, 'Quantity');
+        const r = await rpc('tfd_adjust', { p_sku: s.sku, p_direction: dir, p_qty: qty, p_reason: $('#ar').value, p_note: $('#an').value, p_confirm: confirm });
+        if (r.needs_confirm) { const m = modal(`<h2>Large adjustment</h2><p>${esc(r.message)}</p><div class="actions"><button class="btn primary" id="cy">Confirm</button></div>`); m.querySelector('#cy').onclick = () => { m.remove(); go(true); }; return; }
+        INV.lastAdj = { dir, text: `${dir === 'out' ? 'Removed' : 'Added'} ${qty} × SKU ${s.sku} (${prodLabel(s)}) · ${$('#ar').value} · ${money(r.value_cents)} at cost · now ${r.on_hand} on hand` };
+        invAdjust(el);
+      } catch (e) { $('#ae').textContent = e.message; }
+    };
+    $('#ago').onclick = () => go(false);
+  };
+  $('#as').oninput = () => { A.sku = $('#as').value.replace(/\D/g, ''); results(); };
+  $('#aq').oninput = () => { A.q = $('#aq').value; results(); };
+  results(); panel();
+}
+
+// ================================================================ Stock
+async function invStock(el) {
+  const [stock, lists] = await Promise.all([rpc('tfd_stock'), rpc('tfd_lists')]);
+  INV.stockQ = INV.stockQ || { q: '', brand: '', bin: '', sort: 'sku', dir: 1 };
+  const q = INV.stockQ;
+  const brands = [...new Set(stock.map(s => s.brand).filter(Boolean))].sort(), bins = [...new Set(stock.map(s => s.bin).filter(Boolean))].sort();
+  const low = stock.filter(s => s.on_hand > 0 && s.on_hand <= s.low_stock_effective && !s.low_dismissed), out = stock.filter(s => s.on_hand === 0 && !s.out_dismissed);
+  const totals = stock.reduce((a, s) => ({ units: a.units + s.on_hand, value: a.value + s.value_cents }), { units: 0, value: 0 });
+  const cols = [['sku', 'SKU'], ['name', 'Product'], ['upc', 'UPC'], ['bin', 'Bin'], ['on_hand', 'On hand'], ['held', 'Held'], ['sold_not_packed', 'Sold, not packed'], ['available', 'Available'],
+    ['floor_tiktok', 'Floor (TikTok)'], ['floor_whatnot', 'Floor (Whatnot)'], ['value_cents', 'Value at cost'], ['last_received', 'Last received'], ['sold_30', 'Sold 30d']];
+  const hay = s => [s.sku, s.name, s.brand, s.model, s.color_code, s.color_name, s.lens_size, s.upc, s.category, s.subcategory, s.specs, s.bin, ...(s.lots || []), ...(s.suppliers || [])].filter(Boolean).join(' ').toLowerCase();
+  const draw = () => {
+    let rows = stock.filter(s => (!q.brand || s.brand === q.brand) && (!q.bin || s.bin === q.bin) && (!q.q || hay(s).includes(q.q.toLowerCase())));
+    rows.sort((a, b) => { const x = a[q.sort], y = b[q.sort]; return (x === y ? 0 : x === null || x === undefined ? 1 : y === null || y === undefined ? -1 : x > y ? 1 : -1) * q.dir; });
+    $('#stbl').innerHTML = `<tr>${cols.map(([k, l]) => `<th data-sort="${k}" style="cursor:pointer;white-space:nowrap">${l}${q.sort === k ? (q.dir > 0 ? ' ↑' : ' ↓') : ''}</th>`).join('')}</tr>
+      ${rows.map(s => `<tr data-sku="${s.sku}" class="click"><td class="mono">${s.sku}</td>
+        <td><div class="row" style="flex-wrap:nowrap">${s.image_url ? `<img src="${esc(s.image_url)}" alt="" style="width:36px;height:36px;object-fit:cover;border-radius:6px">` : ''}
+          <div><b>${esc(prodLabel(s))}</b><div class="muted small">${esc(prodSub(s))}${s.color_name ? ' · ' + esc(s.color_name) : ''}</div></div></div></td>
+        <td class="small mono">${esc(s.upc || '')}</td><td>${s.bin === 'NOT_ASSIGNED' ? '<span class="tag off">NOT_ASSIGNED</span>' : esc(s.bin || '—')}</td><td>${s.on_hand}</td><td>${s.held}</td><td>${s.sold_not_packed}</td>
+        <td>${s.available}${s.available > 0 && s.available <= s.low_stock_effective ? ' <span class="tag off">Low</span>' : ''}</td>
+        <td class="mono">${s.floor_tiktok === null ? '—' : money(s.floor_tiktok)}</td><td class="mono">${s.floor_whatnot === null ? '<span class="muted">not set</span>' : money(s.floor_whatnot)}</td>
+        <td class="mono">${money(s.value_cents)}</td><td class="small">${esc(s.last_received || '—')}</td><td>${s.sold_30}</td></tr>`).join('') || `<tr><td colspan="${cols.length}" class="muted">Nothing matches.</td></tr>`}`;
+    el.querySelectorAll('[data-sort]').forEach(th => th.onclick = () => { if (q.sort === th.dataset.sort) q.dir *= -1; else { q.sort = th.dataset.sort; q.dir = 1; } draw(); });
+    el.querySelectorAll('[data-sku]').forEach(tr => tr.onclick = () => skuDrawer(tr.dataset.sku, () => invStock(el)));
+  };
+  const chip = (s, kind) => `<span class="chip">${s.sku} ${esc(prodLabel(s))}${kind === 'low' ? ` (${s.on_hand} left)` : ''}<button class="dismiss" data-dis="${s.sku}" data-kind="${kind}" title="Dismiss until stock changes">×</button></span>`;
+  el.innerHTML = `${low.length || out.length ? `<div class="panel"><h2>Alerts</h2>
+      ${low.length ? `<div class="note warn"><b>Low stock:</b> ${low.map(s => chip(s, 'low')).join(' ')}</div>` : ''}
+      ${out.length ? `<div class="note bad"><b>Out of stock:</b> ${out.map(s => chip(s, 'out')).join(' ')}</div>` : ''}
+      <p class="muted small">× dismisses an alert until that SKU's stock changes again.</p></div>` : ''}
+    <div class="panel"><div class="head"><div><h2>Stock</h2><div class="muted small">${stock.length} SKUs · ${totals.units} units · ${money(totals.value)} at cost · click a row to see or edit everything</div></div>
+      <div class="row"><select id="exl" class="inp"><option value="">Full inventory</option>${lists.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select>
+      <button class="btn" id="exw">Export for Whatnot</button></div></div>
+      <div class="row" style="margin-bottom:12px"><input id="sq" class="inp" placeholder="Search anything: SKU, name, model, color, size, UPC, bin, lot…" style="flex:1;min-width:200px" value="${esc(q.q)}">
+        <select id="sb" class="inp"><option value="">All brands</option>${brands.map(b => `<option ${b === q.brand ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>
+        <select id="sbin" class="inp"><option value="">All bins</option>${bins.map(b => `<option ${b === q.bin ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select></div>
+      <div style="overflow-x:auto"><table id="stbl"></table></div>
+      <p class="muted small">Floors use the highest unit cost in stock and round up to a whole dollar. Held and sold-not-packed fill in once Shows are built.</p></div>`;
+  $('#sq').oninput = () => { q.q = $('#sq').value; draw(); };
+  $('#sb').onchange = () => { q.brand = $('#sb').value; draw(); };
+  $('#sbin').onchange = () => { q.bin = $('#sbin').value; draw(); };
+  $('#exw').onclick = () => whatnotExport($('#exl').value ? Number($('#exl').value) : null);
+  el.querySelectorAll('[data-dis]').forEach(b => b.onclick = async () => { try { await rpc('tfd_alert_dismiss', { p_sku: b.dataset.dis, p_kind: b.dataset.kind }); invStock(el); } catch (e) { toast(e.message, true); } });
+  draw();
+}
+
+async function skuDrawer(sku, done) {
+  const h = await rpc('tfd_sku_history', { p_sku: sku });
+  const p = h.product;
+  const KIND = { receipt: 'Received', adjust_out: 'Removed', adjust_in: 'Added', bin_move: 'Bin move', verify: 'Bin verify', receipt_undo: 'Lot undone', adjust_undo: 'Adjustment undone' };
+  const txt = (id, label, val, extra = '') => `<label class="f">${label}<input id="${id}" class="inp" value="${esc(val ?? '')}" ${extra}></label>`;
+  const cmb = (id, label, key, val) => `<label class="f">${label}${comboInput(id, key, val)}</label>`;
+  const m = modal(`<h2>SKU ${p.sku}</h2><p class="muted">${esc(prodSub(p))} · <b>${p.on_hand}</b> on hand</p>
+    ${p.image_url ? `<img src="${esc(p.image_url)}" alt="" style="max-width:160px;border-radius:8px">` : ''}
+    <h3>Product</h3><div class="grid">${cmb('pb', 'Brand', 'brand', p.brand)}${cmb('pm', 'Model #', 'model', p.model)}${cmb('pcc', 'Color code', 'color_code', p.color_code)}${cmb('pls', 'Lens size', 'lens_size', p.lens_size)}
+      ${txt('pu', 'UPC', p.upc)}${cmb('pn', 'Product name', 'name', p.name)}${cmb('pcn', 'Color name', 'color_name', p.color_name)}${txt('pr', 'Retail price ($)', dl(p.retail_cents), 'inputmode="decimal"')}
+      ${txt('pw', 'Weight (oz)', p.weight_oz, 'inputmode="decimal"')}${cmb('pc', 'Category', 'category', p.category)}${cmb('ps', 'Subcategory', 'subcategory', p.subcategory)}${cmb('psp', 'Specs', 'specs', p.specs)}
+      ${txt('pi', 'Listing image URL', p.image_url)}${txt('pl', 'Low-stock alert at (blank = default)', p.low_stock, 'type="number" min="0"')}</div>
+    <p class="muted small">Brand + model + color + size can't match another SKU, and a UPC can only be on one SKU.</p>
+    <div class="err" id="pe"></div><div class="actions"><button class="btn" id="plab">Print label</button><button class="btn primary" id="psave">Save changes</button></div>
+    <h3>Bin</h3><div class="row">${comboInput('pbin', 'bin', p.bin)}<button class="btn" id="pmove">Move all ${p.on_hand} units here</button></div>
+    <h3>Cost layers (FIFO)</h3><table><tr><th>Received</th><th>Unit cost</th><th>In</th><th>Left</th></tr>
+      ${h.layers.map(c => `<tr><td class="small">${when(c.created_at)}${c.receipt ? ' · lot #' + c.receipt : ' · count up'}</td><td class="mono">${money(c.unit_cost_cents)}</td><td>${c.qty_in}</td><td>${c.qty_remaining}</td></tr>`).join('')}</table>
+    <h3>History</h3><table><tr><th>When</th><th>What</th><th>Qty</th><th>Who</th></tr>
+      ${h.moves.map(x => `<tr><td class="small">${when(x.at)}</td><td>${KIND[x.kind] || esc(x.kind)}${x.reason ? ` <span class="muted small">(${esc(x.reason)})</span>` : ''}${x.detail && x.detail.to ? ` <span class="muted small">${esc(x.detail.from || '')} → ${esc(x.detail.to)}</span>` : ''}${x.receipt_id ? ` <span class="muted small">lot #${x.receipt_id}</span>` : ''}</td>
+        <td>${x.qty > 0 ? '+' : ''}${x.qty || ''}</td><td>${esc(x.actor)}</td></tr>`).join('')}</table>`);
+  m.querySelector('.modal').style.maxWidth = '820px';
+  const close = () => { m.remove(); done(); };
+  m.querySelector('#plab').onclick = () => printLabels([{ sku: p.sku, name: prodLabel(p), qty: 1 }]);
+  m.querySelector('#pmove').onclick = async () => { try { const r = await rpc('tfd_move_sku', { p_sku: sku, p_bin: $('#pbin').value }); toast(r.unchanged ? 'Already in that bin' : 'Moved'); close(); } catch (e) { m.querySelector('#pe').textContent = e.message; } };
+  m.querySelector('#psave').onclick = async () => {
+    try {
+      const r = await rpc('tfd_product_update', { p_sku: sku, p_fields: { brand: $('#pb').value, model: $('#pm').value, color_code: $('#pcc').value, lens_size: $('#pls').value, upc: $('#pu').value,
+        name: $('#pn').value, color_name: $('#pcn').value, retail_cents: dollarsIn($('#pr').value), weight_oz: numIn($('#pw').value, 'Weight'), category: $('#pc').value,
+        subcategory: $('#ps').value, specs: $('#psp').value, image_url: $('#pi').value, low_stock: intIn($('#pl').value, 'Low-stock alert') } });
+      toast(r.unchanged ? 'No changes' : 'Saved'); close();
+    } catch (e) { m.querySelector('#pe').textContent = e.message; }
+  };
+}
+
+// ================================================================ Bins
+async function invBins(el) {
+  const bins = await rpc('tfd_bins');
+  INV.binQ = INV.binQ || '';
+  el.innerHTML = `<div class="panel"><div class="head"><div><h2>Bins</h2><p class="muted small">One bin per SKU, each SKU in its own labeled bag. Click a bin to see what's in it and its history.</p></div>
+      <div class="row"><button class="btn" id="mv">Move SKU</button><button class="btn primary" id="nb">New bin</button></div></div>
+    <input id="bq" class="inp" style="width:100%;margin-bottom:12px" placeholder="Search bins: bin code, or a SKU / product inside" value="${esc(INV.binQ)}">
+    <div class="grid" id="bgrid"></div></div>`;
+  const draw = () => {
+    const lc = INV.binQ.trim().toLowerCase();
+    const rows = bins.filter(b => !lc || b.code.toLowerCase().includes(lc) || b.skus.some(s => [s.sku, s.name, s.brand, s.model, s.color_code, s.color_name, s.lens_size, s.upc].filter(Boolean).join(' ').toLowerCase().includes(lc)));
+    $('#bgrid').innerHTML = rows.map(b => `<div class="panel bincard ${b.code === 'NOT_ASSIGNED' && b.skus.length ? 'warnc' : ''}" data-bin="${esc(b.code)}" style="margin:0">
+        <div class="head" style="margin-bottom:6px"><h2 style="margin:0">${esc(b.code)}</h2><span class="muted small">${b.skus.length} SKU${b.skus.length === 1 ? '' : 's'} · ${b.skus.reduce((a, s) => a + s.on_hand, 0)} units</span></div>
+        ${b.note ? `<div class="muted small">${esc(b.note)}</div>` : ''}
+        ${b.skus.slice(0, 6).map(s => `<div class="small" style="padding:3px 0;border-bottom:1px solid var(--line)"><span class="mono">${s.sku}</span> · ${esc(prodLabel(s))} <b style="float:right">${s.on_hand}</b></div>`).join('') || '<div class="muted small">Empty</div>'}
+        ${b.skus.length > 6 ? `<div class="muted small">+${b.skus.length - 6} more</div>` : ''}</div>`).join('') || '<p class="muted">No bins match.</p>';
+    el.querySelectorAll('[data-bin]').forEach(c => c.onclick = () => binModal(c.dataset.bin, () => invBins(el)));
+  };
+  $('#bq').oninput = () => { INV.binQ = $('#bq').value; draw(); };
+  $('#nb').onclick = () => {
+    const m = modal(`<h2>New bin</h2><div class="grid"><label class="f">Code (e.g. A4)<input id="bc" class="inp"></label><label class="f">Note (optional)<input id="bn" class="inp"></label></div>
+      <div class="err" id="be"></div><div class="actions"><button class="btn primary" id="bs">Create</button></div>`);
+    m.querySelector('#bs').onclick = async () => { try { await rpc('tfd_bin_create', { p_code: $('#bc').value, p_note: $('#bn').value }); m.remove(); invBins(el); } catch (e) { m.querySelector('#be').textContent = e.message; } };
+  };
+  $('#mv').onclick = () => moveModal(null, () => invBins(el));
+  draw();
+}
+function moveModal(sku, done) {
+  const m = modal(`<h2>Move SKU</h2><p class="muted small">Moves all units of the SKU. There's no partial move.</p>
+    <div class="grid"><label class="f">SKU<input id="ms" class="inp mono" value="${esc(sku || '')}"></label><label class="f">To bin${comboInput('mb', 'bin', '')}</label></div>
+    <div class="err" id="me"></div><div class="actions"><button class="btn primary" id="mgo">Move</button></div>`);
+  m.querySelector('#mgo').onclick = async () => { try { await rpc('tfd_move_sku', { p_sku: $('#ms').value.trim(), p_bin: $('#mb').value }); m.remove(); toast('Moved'); done(); } catch (e) { m.querySelector('#me').textContent = e.message; } };
+}
+async function binModal(code, done) {
+  const b = await rpc('tfd_bin_detail', { p_code: code });
+  const KIND = { bin_move: 'Moved', receipt: 'Arrived', verify: 'Verified' };
+  const m = modal(`<h2>Bin ${esc(b.code)}</h2>${b.note ? `<p class="muted">${esc(b.note)}</p>` : ''}
+    <div class="head"><h3 style="margin:0">In this bin now</h3><div class="row"><button class="btn" id="bmv">Move a SKU in</button><button class="btn primary" id="bver" ${b.skus.length ? '' : 'disabled'}>Verify counts</button></div></div>
+    <table><tr><th>SKU</th><th>Product</th><th>UPC</th><th>On hand</th></tr>${b.skus.map(s => `<tr data-sku="${s.sku}" class="click"><td class="mono">${s.sku}</td><td><b>${esc(prodLabel(s))}</b><div class="muted small">${esc(prodSub(s))}</div></td><td class="small mono">${esc(s.upc || '')}</td><td>${s.on_hand}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Empty</td></tr>'}</table>
+    <h3>History</h3><table><tr><th>When</th><th>What</th><th>SKU</th><th>Who</th></tr>
+    ${b.history.map(x => `<tr><td class="small" style="white-space:nowrap">${when(x.at)}</td><td>${x.kind === 'bin_move' ? (x.to === b.code ? `Moved in from ${esc(x.from || 'no bin')}` : `Moved out to ${esc(x.to)}`) : x.kind === 'receipt' ? `Arrived (${x.qty} units, lot)` : x.kind === 'verify' ? 'Count verified' : esc(KIND[x.kind] || x.kind)}</td>
+      <td><span class="mono">${x.sku}</span> <span class="small">${esc(x.name || '')}</span></td><td>${esc(x.actor)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No history yet.</td></tr>'}</table>`);
+  m.querySelector('.modal').style.maxWidth = '780px';
+  m.querySelectorAll('[data-sku]').forEach(tr => tr.onclick = () => { m.remove(); skuDrawer(tr.dataset.sku, done); });
+  m.querySelector('#bmv').onclick = () => { m.remove(); moveModal(null, done); setTimeout(() => { const i = document.querySelector('#mb'); if (i) i.value = b.code; }, 0); };
+  m.querySelector('#bver').onclick = () => { m.remove(); verifyModal(b, done); };
+}
+function verifyModal(b, done) {
+  const m = modal(`<h2>Verify bin ${esc(b.code)}</h2><p class="muted small">Count each bag and enter what's really there.</p>
+    ${b.skus.map(s => `<div class="toggle"><span><span class="mono">${s.sku}</span> · ${esc(prodLabel(s))}</span><input class="inp" style="width:80px" type="number" min="0" data-cnt="${s.sku}"></div>`).join('')}
+    <div id="vd"></div><div class="err" id="ve"></div><div class="actions"><button class="btn primary" id="vgo">Check counts</button></div>`);
+  const counts = () => { const o = {}; m.querySelectorAll('[data-cnt]').forEach(i => { if (i.value === '') throw new Error('Enter a count for every SKU'); o[i.dataset.cnt] = intIn(i.value, 'Count'); }); return o; };
+  m.querySelector('#vgo').onclick = async () => {
+    try {
+      const c = counts();
+      const r = await rpc('tfd_bin_verify', { p_bin: b.code, p_counts: c, p_confirm: false });
+      if (!r.differences.length) { await rpc('tfd_bin_verify', { p_bin: b.code, p_counts: c, p_confirm: true }); m.remove(); toast('All counts match. Verified.'); return done(); }
+      $('#vd').innerHTML = `<div class="note warn">Differences:<br>${r.differences.map(d => `${d.sku}: app says ${d.on_hand}, counted ${d.counted} (${d.diff > 0 ? '+' : ''}${d.diff})`).join('<br>')}<br>Confirming records these as count corrections.</div>`;
+      const btn2 = m.querySelector('#vgo'); btn2.textContent = 'Confirm corrections';
+      btn2.onclick = async () => { try { await rpc('tfd_bin_verify', { p_bin: b.code, p_counts: counts(), p_confirm: true }); m.remove(); toast('Corrected'); done(); } catch (e) { $('#ve').textContent = e.message; } };
+    } catch (e) { $('#ve').textContent = e.message; }
+  };
+}
+
+// ================================================================ Versions (inventory safety net)
+async function invVersions(el) {
+  const raw = await rpc('tfd_versions', { p_limit: 500 });
+  const vs = [];   // fold runs of draft-grid edits into one row (restoring lands after the newest edit in the run)
+  raw.forEach(v => { const prev = vs[vs.length - 1];
+    if (prev && prev.summary.startsWith('Lot draft edited') && v.summary === 'Lot draft edited') { prev.n = (prev.n || 1) + 1; prev.changes += v.changes; prev.at = v.at; prev.summary = `Lot draft edited (${prev.n} edits)`; }
+    else vs.push({ ...v }); });
+  el.innerHTML = `<div class="panel"><h2>Versions</h2>
+    <p class="muted small">Every inventory action saves a version automatically. If something goes wrong (a bad lot, a wrong adjustment, a mass mistake), restore inventory to how it was right after any earlier action.
+      Everything after that point is reversed. A restore is itself a version, so it can be reversed too. Lot photo files are never deleted.</p>
+    <div style="overflow-x:auto"><table><tr><th>When</th><th>Who</th><th>What happened</th><th>Changes</th><th></th></tr>
+    ${vs.map((v, i) => `<tr><td class="small" style="white-space:nowrap">${when(v.at)}</td><td>${v.actor === 'Claude' ? '<span class="tag claude">Claude</span>' : esc(v.actor || '')}</td>
+      <td>${v.restore ? '<span class="tag">Restore</span> ' : ''}${esc(v.summary)}</td><td>${v.changes}</td>
+      <td>${i === 0 ? '<span class="tag">Current</span>' : `<button class="btn" style="white-space:nowrap" data-v="${i}">Restore to here</button>`}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">No versions yet. They start with the next inventory action.</td></tr>'}
+    </table></div></div>`;
+  el.querySelectorAll('[data-v]').forEach(b => b.onclick = () => {
+    const i = Number(b.dataset.v), v = vs[i];
+    const m = modal(`<h2>Restore inventory?</h2>
+      <p>Inventory goes back to exactly how it was right after:<br><b>${esc(v.summary)}</b> <span class="muted small">(${when(v.at)}, ${esc(v.actor || '')})</span></p>
+      <div class="note warn">Every later version shown above it will be reversed: stock, SKUs, lots, bins, lists and alerts. Nothing is deleted from history, and you can reverse this restore from this same page.</div>
+      <label class="f">Reason<input id="vr" class="inp"></label><label class="f" style="margin-top:10px">Type RESTORE to confirm<input id="vc" class="inp" autocomplete="off"></label>
+      <div class="err" id="ve"></div><div class="actions"><button class="btn danger" id="vgo">Restore</button></div>`);
+    m.querySelector('#vgo').onclick = async () => {
+      try { const r = await rpc('tfd_version_restore', { p_tx: v.tx, p_reason: $('#vr').value, p_confirm: $('#vc').value.trim() }); m.remove(); toast(`Restored. ${r.actions} action(s) reversed.`); invVersions(el); }
+      catch (e) { m.querySelector('#ve').textContent = e.message; }
+    };
+  });
+}
+
+// ================================================================ CSV helpers
 function parseCSV(text) {
   const rows = []; let row = [], f = '', q = false;
   text = text.replace(/^﻿/, '');
@@ -47,296 +608,6 @@ function downloadCSV(name, header, rows) {
   const text = [header, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n');
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-}
-
-function templateToLines(rows) {
-  if (!rows.length) throw new Error('The file is empty');
-  const head = rows[0].map(h => h.trim().toLowerCase());
-  const map = head.map(h => COL_KEYS[h]);
-  const missing = ['brand', 'model', 'color_code', 'lens_size', 'invoiced_qty', 'unit_cost'].filter(k => !map.includes(k));
-  if (missing.length) throw new Error('This isn\'t the TFD receiving template. Missing columns: ' + missing.join(', ') + '. Download the template and convert the invoice into it.');
-  const meta = {}; const lines = [];
-  rows.slice(1).forEach((r, i) => {
-    const o = {}; map.forEach((k, j) => { if (k) o[k] = (r[j] ?? '').trim(); });
-    if (o.supplier && !meta.supplier) meta.supplier = o.supplier;
-    if (o.invoice_no && !meta.invoice_no) meta.invoice_no = o.invoice_no;
-    if (o.date && !meta.date) meta.date = o.date;
-    if (!['brand', 'model', 'color_code', 'lens_size', 'invoiced_qty', 'unit_cost'].some(k => o[k])) return;
-    try {
-      lines.push({ brand: o.brand, model: o.model, color_code: o.color_code, lens_size: o.lens_size, invoiced_qty: intIn(o.invoiced_qty, 'Quantity') ?? 0,
-        unit_cost_cents: dollarsIn(o.unit_cost), name: o.name, color_name: o.color_name, retail_cents: dollarsIn(o.retail), category: o.category,
-        subcategory: o.subcategory, weight_oz: o.weight_oz || null, upc: o.upc, image_url: o.image_url, bin_code: o.bin_code });
-    } catch (e) { throw new Error('Row ' + (i + 2) + ': ' + e.message); }
-  });
-  return { meta, lines };
-}
-
-async function invReceiving(el) {
-  if (INV.receipt) return receiptEditor(el, INV.receipt);
-  const rs = await rpc('tfd_receipts');
-  el.innerHTML = `<div class="panel"><div class="head"><h2>Receipts</h2><div class="row">
-      <button class="btn" id="tpl">Download template</button><button class="btn primary" id="newr">New receipt</button></div></div>
-    <table><tr><th>#</th><th>Supplier</th><th>Invoice</th><th>Date</th><th>Lines</th><th>Units</th><th>Cost</th><th>Status</th></tr>
-    ${rs.map(r => `<tr data-r="${r.id}" style="cursor:pointer"><td>${r.id}</td><td>${esc(r.supplier)}</td><td>${esc(r.invoice_no || '—')}</td><td>${esc(r.received_date)}</td>
-      <td>${r.lines}</td><td>${r.units}</td><td class="mono">${money(r.cost_cents)}</td>
-      <td>${r.status === 'draft' ? '<span class="tag">Draft</span>' : r.status === 'undone' ? '<span class="tag off">Undone</span>' : 'Confirmed'}${r.discrepancies ? ` <span class="tag off">${r.discrepancies} count diff</span>` : ''}</td></tr>`).join('')
-      || '<tr><td colspan="8" class="muted">No receipts yet. Click New receipt.</td></tr>'}</table>
-    <p class="muted small">Every import uses the TFD receiving template. Convert any supplier invoice into it first (an AI can do this), then import. Nothing changes stock until you click Confirm count.</p></div>`;
-  $('#tpl').onclick = () => downloadCSV('TFD Receiving Template.csv', TEMPLATE_COLS, [['Designer Eyes', 'INV-1001', '2026-11-10', 'Ray-Ban', 'RB3025', '001', '58', '10', '50.00', 'Ray-Ban Aviator Classic Gold', 'Gold / Green', '163.00', 'Bags & Accessories', 'Sunglasses', '1.5', '', '', 'A4']]);
-  el.querySelectorAll('[data-r]').forEach(tr => tr.onclick = () => { INV.receipt = Number(tr.dataset.r); invReceiving(el); });
-  $('#newr').onclick = () => {
-    const sup = (S_inv.settings?.lists?.suppliers) || [];
-    const m = modal(`<h2>New receipt</h2><div class="grid">
-      <label class="f">Supplier<input id="rs" class="inp" list="supl" value="${esc(sup[0] || '')}"><datalist id="supl">${sup.map(s => `<option value="${esc(s)}">`).join('')}</datalist></label>
-      <label class="f">Invoice # (optional for one-offs)<input id="ri" class="inp"></label>
-      <label class="f">Date received<input id="rd" class="inp" type="date" value="${new Date().toLocaleDateString('en-CA')}"></label></div>
-      <label class="f" style="margin-top:12px">TFD template CSV (leave empty for a blank receipt)<input id="rf" type="file" accept=".csv"></label>
-      <div class="err" id="re"></div><div class="actions"><button class="btn primary" id="rgo">Create draft</button></div>`);
-    m.querySelector('#rgo').onclick = async () => {
-      try {
-        let lines = [], meta = {}, fname = null;
-        const f = $('#rf').files[0];
-        if (f) { ({ meta, lines } = templateToLines(parseCSV(await f.text()))); fname = f.name; }
-        const supplier = $('#rs').value.trim() || meta.supplier, inv = $('#ri').value.trim() || meta.invoice_no || '', d = $('#rd').value || meta.date;
-        const id = await rpc('tfd_receipt_create', { p_supplier: supplier, p_invoice_no: inv, p_date: d, p_lines: lines, p_source_file: fname });
-        m.remove(); INV.receipt = id; invReceiving(el);
-      } catch (e) { $('#re').textContent = e.message; }
-    };
-  };
-}
-const S_inv = {};
-
-function lineFields(l) {
-  return { brand: l.brand, model: l.model, color_code: l.color_code, lens_size: l.lens_size, invoiced_qty: l.invoiced_qty, received_qty: l.received_qty,
-    unit_cost_cents: l.unit_cost_cents, name: l.name, color_name: l.color_name, retail_cents: l.retail_cents, weight_oz: l.weight_oz, image_url: l.image_url,
-    category: l.category, subcategory: l.subcategory, upc: l.upc, specs: l.specs, bin_code: l.bin_code, lists: l.lists, map_sku: l.map_sku,
-    confirmed_new: l.confirmed_new, updates: l.updates };
-}
-
-async function receiptEditor(el, id) {
-  const r = await rpc('tfd_receipt', { p_id: id });
-  const lists = (await rpc('tfd_lists')).filter(x => x.kind === 'manual');
-  const draft = r.status === 'draft';
-  const units = r.lines.reduce((a, l) => a + l.received_qty, 0), cost = r.lines.reduce((a, l) => a + l.received_qty * (l.unit_cost_cents || 0), 0);
-  const problems = r.lines.filter(l => l.check && (l.check.problems.length || l.check.status === 'near')).length;
-  const badge = l => !l.check ? (l.result_sku ? `<span class="mono">${l.result_sku}</span>` : '') :
-    l.check.status === 'existing' ? `<span class="mono">${l.check.product.sku}</span>` : l.check.status === 'near' ? '<span class="tag off">Check match</span>' : '<span class="tag claude">NEW</span>';
-  el.innerHTML = `<div class="panel"><div class="head"><div><a href="#inventory/receiving" id="back" class="small">← All receipts</a>
-      <h2 style="margin-top:6px">Receipt #${r.id} ${draft ? '<span class="tag">Draft</span>' : r.status === 'undone' ? '<span class="tag off">Undone</span>' : '<span class="tag">Confirmed</span>'}</h2></div>
-      ${draft ? '<button class="btn danger" id="discard">Discard draft</button>' : ''}</div>
-    <div class="grid"><label class="f">Supplier<input id="hs" class="inp" value="${esc(r.supplier)}" ${draft ? '' : 'disabled'}></label>
-      <label class="f">Invoice #<input id="hi" class="inp" value="${esc(r.invoice_no || '')}" ${draft ? '' : 'disabled'}></label>
-      <label class="f">Date received<input id="hd" class="inp" type="date" value="${esc(r.received_date)}" ${draft ? '' : 'disabled'}></label></div>
-    ${r.source_file ? `<p class="muted small">Imported from ${esc(r.source_file)}</p>` : ''}</div>
-    <div class="panel"><div class="head"><h2>Lines</h2>${draft ? `<div class="row">
-      <select id="bl" class="inp"><option value="">Add all lines to list…</option>${lists.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>
-      <input id="bb" class="inp" placeholder="Bin for new lines" style="width:150px"><button class="btn" id="bba">Apply</button>
-      <button class="btn" id="addl">Add line</button></div>` : ''}</div>
-    <div style="overflow-x:auto"><table><tr><th>#</th><th>SKU</th><th>Product</th><th>Invoiced</th><th>Received</th><th>Unit cost</th><th>Bin</th><th></th></tr>
-    ${r.lines.map(l => `<tr><td>${l.line_no}</td><td>${badge(l)}</td>
-      <td><b>${esc(l.brand || '?')} ${esc(l.model || '')}</b> <span class="muted">${esc(l.color_code || '')} · ${esc(l.lens_size || '')}</span><div class="small">${esc(l.name || (l.check?.product?.name) || '')}</div>
-        ${l.check && l.check.problems.length ? `<div class="note bad" style="margin:6px 0 0">${l.check.problems.map(esc).join('<br>')}</div>` : ''}
-        ${l.check && l.check.status === 'near' ? `<div class="note warn" style="margin:6px 0 0">Similar to ${l.check.near.map(n => `${n.sku} (${esc(n.color_code)} · ${esc(n.lens_size)})`).join(', ')}. Open Details to pick one or confirm it's new.</div>` : ''}
-        ${l.check && l.check.conflicts.length ? `<div class="note warn" style="margin:6px 0 0">Differs from catalog: ${l.check.conflicts.map(c => esc(c.field.replace(/_/g, ' '))).join(', ')} (catalog kept unless you choose otherwise in Details)</div>` : ''}
-        ${!draft && l.received_qty !== l.invoiced_qty ? `<div class="small" style="color:var(--bad)">${l.received_qty < l.invoiced_qty ? 'Short' : 'Over'} by ${Math.abs(l.received_qty - l.invoiced_qty)}</div>` : ''}</td>
-      <td>${l.invoiced_qty}</td>
-      <td>${draft ? `<input class="inp" style="width:70px" type="number" min="0" data-rq="${l.id}" value="${l.received_qty}">` : l.received_qty}</td>
-      <td>${draft ? `<div class="affix" style="width:110px"><span>$</span><input type="number" step="0.01" min="0" data-uc="${l.id}" value="${dl(l.unit_cost_cents)}"></div>` : money(l.unit_cost_cents)}</td>
-      <td>${l.check && l.check.status === 'existing' && l.check.product.bin ? esc(l.check.product.bin) : draft ? `<input class="inp" style="width:80px" data-bin="${l.id}" value="${esc(l.bin_code || '')}">` : esc(l.bin_code || '')}</td>
-      <td>${draft ? `<button class="btn" data-det="${l.id}">Details</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">No lines yet.</td></tr>'}
-    </table></div>
-    <div class="actions" style="justify-content:space-between"><div><b>${units}</b> units received · <b>${money(cost)}</b> at cost${problems ? ` · <span style="color:var(--bad)">${problems} line(s) need attention</span>` : ''}</div>
-      ${draft ? '<button class="btn primary" id="confirm">Confirm count</button>' : `<button class="btn" id="labels">Print SKU labels</button>`}</div></div>`;
-  $('#back').onclick = e => { e.preventDefault(); INV.receipt = null; invReceiving(el); };
-  if (!draft) { $('#labels').onclick = () => printLabels(r.lines.filter(l => l.result_sku).map(l => ({ sku: l.result_sku, name: l.name || `${l.brand} ${l.model}`, qty: l.received_qty }))); return; }
-  const reload = () => receiptEditor(el, id);
-  const saveHeader = async () => { try { await rpc('tfd_receipt_header', { p_id: id, p_supplier: $('#hs').value, p_invoice_no: $('#hi').value, p_date: $('#hd').value }); } catch (e) { toast(e.message, true); } };
-  ['#hs', '#hi', '#hd'].forEach(s => $(s).onchange = saveHeader);
-  const saveLine = async (l, patch) => { try { await rpc('tfd_receipt_line_save', { p_receipt_id: id, p_line_id: l ? l.id : null, p_fields: { ...(l ? lineFields(l) : {}), ...patch } }); reload(); } catch (e) { toast(e.message, true); } };
-  el.querySelectorAll('[data-rq]').forEach(i => i.onchange = () => { try { saveLine(r.lines.find(l => l.id === Number(i.dataset.rq)), { received_qty: intIn(i.value, 'Received') ?? 0 }); } catch (e) { toast(e.message, true); } });
-  el.querySelectorAll('[data-uc]').forEach(i => i.onchange = () => { try { saveLine(r.lines.find(l => l.id === Number(i.dataset.uc)), { unit_cost_cents: dollarsIn(i.value) }); } catch (e) { toast(e.message, true); } });
-  el.querySelectorAll('[data-bin]').forEach(i => i.onchange = () => saveLine(r.lines.find(l => l.id === Number(i.dataset.bin)), { bin_code: i.value }));
-  el.querySelectorAll('[data-det]').forEach(b => b.onclick = () => lineModal(id, r.lines.find(l => l.id === Number(b.dataset.det)), lists, reload));
-  $('#addl').onclick = () => lineModal(id, null, lists, reload);
-  $('#bba').onclick = async () => {
-    const bin = $('#bb').value.trim(), list = $('#bl').value;
-    if (!bin && !list) return toast('Pick a list or type a bin first', true);
-    try {
-      for (const l of r.lines) {
-        const patch = {};
-        if (bin && !l.bin_code && !(l.check?.status === 'existing' && l.check.product.bin)) patch.bin_code = bin;
-        if (list && !(l.lists || []).includes(Number(list))) patch.lists = [...(l.lists || []), Number(list)];
-        if (Object.keys(patch).length) await rpc('tfd_receipt_line_save', { p_receipt_id: id, p_line_id: l.id, p_fields: { ...lineFields(l), ...patch } });
-      }
-      toast('Applied'); reload();
-    } catch (e) { toast(e.message, true); }
-  };
-  $('#discard').onclick = () => {
-    const m = modal(`<h2>Discard this draft?</h2><p>Receipt #${id} and its ${r.lines.length} line(s) will be deleted. Stock was never changed.</p><div class="actions"><button class="btn danger" id="dy">Discard</button></div>`);
-    m.querySelector('#dy').onclick = async () => { try { await rpc('tfd_receipt_discard', { p_id: id }); m.remove(); INV.receipt = null; invReceiving(el); } catch (e) { toast(e.message, true); } };
-  };
-  $('#confirm').onclick = () => {
-    const short = r.lines.filter(l => l.received_qty !== l.invoiced_qty);
-    const m = modal(`<h2>Confirm count</h2><p>This adds <b>${units}</b> units (<b>${money(cost)}</b> at cost) to stock and creates any NEW SKUs.</p>
-      ${short.length ? `<div class="note warn">${short.length} line(s) differ from the invoice. They'll be flagged for a supplier claim.</div>` : ''}
-      <div class="err" id="ce" style="white-space:pre-line"></div><div class="actions"><button class="btn primary" id="cy">Confirm count</button></div>`);
-    m.querySelector('#cy').onclick = async () => {
-      try {
-        const res = await rpc('tfd_receipt_confirm', { p_id: id });
-        m.remove(); toast(`Added ${res.units} units · ${res.new_skus} new SKU(s)`); reload();
-      } catch (e) { $('#ce').textContent = e.message; }
-    };
-  };
-}
-
-function lineModal(rid, l, lists, done) {
-  const v = l || { invoiced_qty: 0, received_qty: 0, lists: [], updates: [] };
-  const c = l && l.check;
-  const inp = (id, label, val, extra = '') => `<label class="f">${label}<input id="${id}" class="inp" value="${esc(val ?? '')}" ${extra}></label>`;
-  const m = modal(`<h2>${l ? 'Line ' + l.line_no : 'New line'}</h2>
-    ${c && c.status === 'near' ? `<div class="note warn">This looks like an existing product. Pick it if it's the same thing (a typo on the invoice), or confirm it's new.
-      <div class="row" style="margin-top:8px">${c.near.map(n => `<button class="btn" data-map="${n.sku}">Use ${n.sku}: ${esc(n.brand)} ${esc(n.model)} ${esc(n.color_code)} · ${esc(n.lens_size)}</button>`).join('')}
-      <button class="btn primary" id="isnew">It's a new product</button></div></div>` : ''}
-    ${l && l.map_sku ? `<div class="note ok">Mapped to existing SKU ${l.map_sku}. <button class="btn" id="unmap">Undo</button></div>` : ''}
-    <h3>Identity (brand + model # + color code + lens size = one product)</h3>
-    <div class="grid">${inp('lb', 'Brand', v.brand, 'list="brl"')}<datalist id="brl">${((S_inv.settings?.lists?.brands) || []).map(b => `<option value="${esc(b)}">`).join('')}</datalist>
-      ${inp('lm', 'Model #', v.model)}${inp('lc', 'Color code', v.color_code)}${inp('ll', 'Lens size', v.lens_size)}</div>
-    <h3>Count and cost</h3>
-    <div class="grid">${inp('lqi', 'Invoiced qty', v.invoiced_qty, 'type="number" min="0"')}${inp('lqr', 'Received qty', v.received_qty, 'type="number" min="0"')}${inp('luc', 'Unit cost ($)', dl(v.unit_cost_cents), 'type="number" step="0.01" min="0"')}
-      ${inp('lbin', 'Bin', v.bin_code, c && c.status === 'existing' && c.product.bin ? 'disabled placeholder="' + esc(c.product.bin) + '"' : '')}</div>
-    <h3>Product details ${c && c.status === 'existing' ? '<span class="muted small">(catalog values are kept unless you tick "update catalog")</span>' : ''}</h3>
-    <div class="grid">${inp('ln', 'Product name', v.name)}${inp('lcn', 'Color name', v.color_name)}${inp('lr', 'Retail price ($)', dl(v.retail_cents), 'type="number" step="0.01" min="0"')}
-      ${inp('lw', 'Weight (oz)', v.weight_oz, 'type="number" step="0.01" min="0"')}${inp('lcat', 'Category', v.category)}${inp('lsub', 'Subcategory', v.subcategory)}
-      ${inp('lu', 'UPC', v.upc)}${inp('li', 'Image URL', v.image_url)}${inp('lsp', 'Specs', v.specs)}</div>
-    ${c && c.conflicts.length ? `<h3>Differs from catalog</h3>${c.conflicts.map(x => `<div class="toggle"><span><b>${esc(x.field.replace(/_/g, ' '))}</b>: catalog "${esc(x.catalog)}" vs invoice "${esc(x.line)}"</span>
-      <label class="small"><input type="checkbox" data-upd="${x.field}" ${x.update ? 'checked' : ''}> update catalog</label></div>`).join('')}` : ''}
-    <h3>Add to lists</h3><div class="row">${lists.map(x => `<label class="small"><input type="checkbox" data-list="${x.id}" ${(v.lists || []).includes(x.id) ? 'checked' : ''}> ${esc(x.name)}</label>`).join('') || '<span class="muted small">No manual lists yet (Inventory → Lists).</span>'}</div>
-    <div class="err" id="le2"></div><div class="actions">${l ? '<button class="btn danger" id="ldel">Delete line</button>' : ''}<button class="btn primary" id="lsave">Save line</button></div>`);
-  const read = extra => {
-    const f = {
-      brand: $('#lb').value, model: $('#lm').value, color_code: $('#lc').value, lens_size: $('#ll').value,
-      invoiced_qty: intIn($('#lqi').value, 'Invoiced qty') ?? 0, received_qty: intIn($('#lqr').value, 'Received qty') ?? 0, unit_cost_cents: dollarsIn($('#luc').value),
-      bin_code: $('#lbin').disabled ? null : $('#lbin').value, name: $('#ln').value, color_name: $('#lcn').value, retail_cents: dollarsIn($('#lr').value),
-      weight_oz: $('#lw').value || null, category: $('#lcat').value, subcategory: $('#lsub').value, upc: $('#lu').value, image_url: $('#li').value, specs: $('#lsp').value,
-      lists: [...m.querySelectorAll('[data-list]')].filter(x => x.checked).map(x => Number(x.dataset.list)),
-      updates: [...m.querySelectorAll('[data-upd]')].filter(x => x.checked).map(x => x.dataset.upd),
-      map_sku: l ? l.map_sku : null, confirmed_new: l ? l.confirmed_new : false, ...extra };
-    return f;
-  };
-  const save = async extra => {
-    try { await rpc('tfd_receipt_line_save', { p_receipt_id: rid, p_line_id: l ? l.id : null, p_fields: read(extra) }); m.remove(); done(); }
-    catch (e) { m.querySelector('#le2').textContent = e.message; }
-  };
-  m.querySelector('#lsave').onclick = () => save({});
-  m.querySelectorAll('[data-map]').forEach(b => b.onclick = () => save({ map_sku: b.dataset.map, confirmed_new: false }));
-  if (m.querySelector('#isnew')) m.querySelector('#isnew').onclick = () => save({ confirmed_new: true, map_sku: null });
-  if (m.querySelector('#unmap')) m.querySelector('#unmap').onclick = () => save({ map_sku: null });
-  if (m.querySelector('#ldel')) m.querySelector('#ldel').onclick = async () => { try { await rpc('tfd_receipt_line_delete', { p_receipt_id: rid, p_line_id: l.id }); m.remove(); done(); } catch (e) { toast(e.message, true); } };
-}
-
-// ================================================================ Adjustments
-async function invAdjust(el) {
-  const stock = await rpc('tfd_stock');
-  const act = await rpc('tfd_activity', { p_filters: { tab: 'Inventory' } });
-  const recent = act.rows.filter(r => r.action === 'adjust_out' || r.action === 'adjust_in').slice(0, 25);
-  el.innerHTML = `<div class="panel"><h2>Adjust stock</h2><div class="grid">
-      <label class="f">SKU<input id="as" class="inp" list="skl" placeholder="6 digits"><datalist id="skl">${stock.map(s => `<option value="${s.sku}">${esc(s.name || s.brand + ' ' + s.model)} · ${s.on_hand} on hand</option>`).join('')}</datalist></label>
-      <label class="f">Change<select id="ad" class="inp"><option value="out">Remove units</option><option value="in">Add units (count correction)</option></select></label>
-      <label class="f">Quantity<input id="aq" class="inp" type="number" min="1" value="1"></label>
-      <label class="f">Reason<select id="ar" class="inp">${REASONS_OUT.map(r => `<option>${r}</option>`).join('')}</select></label>
-      <label class="f">Note (optional)<input id="an" class="inp"></label></div>
-    <div id="ainfo" class="muted small" style="margin-top:8px"></div>
-    <div class="err" id="ae"></div><div class="actions"><button class="btn primary" id="ago">Save adjustment</button></div>
-    <p class="muted small">Removals take the oldest cost first (FIFO). Additions come in at the most recent cost.</p></div>
-    <div class="panel"><h2>Customer returns</h2><p class="muted">Returns are entered by order number, so they arrive with Shows (Phase 3–4), once orders exist in the app.</p></div>
-    <div class="panel"><h2>Recent adjustments</h2><table><tr><th>When</th><th>Who</th><th>What</th></tr>
-      ${recent.map(r => `<tr><td class="small">${when(r.at)}</td><td>${esc(r.actor)}</td><td>${esc(r.summary)}${r.reason ? `<div class="muted small">${esc(r.reason)}</div>` : ''}${r.undone_by ? ' <span class="tag off">Undone</span>' : ''}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">None yet.</td></tr>'}
-    </table><p class="muted small">To undo one, use the Activity Log.</p></div>`;
-  const info = () => { const s = stock.find(x => x.sku === $('#as').value.trim()); $('#ainfo').textContent = s ? `${s.name || s.brand + ' ' + s.model} · ${s.on_hand} on hand · bin ${s.bin || '—'}` : ''; };
-  $('#as').oninput = info;
-  $('#ad').onchange = () => { $('#ar').innerHTML = ($('#ad').value === 'out' ? REASONS_OUT : ['count correction', 'found']).map(r => `<option>${r}</option>`).join(''); };
-  const go = async confirm => {
-    try {
-      const r = await rpc('tfd_adjust', { p_sku: $('#as').value.trim(), p_direction: $('#ad').value, p_qty: intIn($('#aq').value, 'Quantity'), p_reason: $('#ar').value, p_note: $('#an').value, p_confirm: confirm });
-      if (r.needs_confirm) {
-        const m = modal(`<h2>Large adjustment</h2><p>${esc(r.message)}</p><div class="actions"><button class="btn primary" id="cy">Confirm</button></div>`);
-        m.querySelector('#cy').onclick = () => { m.remove(); go(true); }; return;
-      }
-      toast(`Saved · ${money(r.value_cents)} at cost · ${r.on_hand} now on hand`); invAdjust(el);
-    } catch (e) { $('#ae').textContent = e.message; }
-  };
-  $('#ago').onclick = () => go(false);
-}
-
-// ================================================================ Stock
-async function invStock(el) {
-  const [stock, lists] = await Promise.all([rpc('tfd_stock'), rpc('tfd_lists')]);
-  INV.stockQ = INV.stockQ || { q: '', brand: '', bin: '', sort: 'sku', dir: 1 };
-  const q = INV.stockQ;
-  const brands = [...new Set(stock.map(s => s.brand))].sort(), bins = [...new Set(stock.map(s => s.bin).filter(Boolean))].sort();
-  const low = stock.filter(s => s.available > 0 && s.available <= s.low_stock_effective), out = stock.filter(s => s.available === 0 && s.on_hand === 0);
-  const totals = stock.reduce((a, s) => ({ units: a.units + s.on_hand, value: a.value + s.value_cents }), { units: 0, value: 0 });
-  const cols = [['sku', 'SKU'], ['name', 'Product'], ['bin', 'Bin'], ['on_hand', 'On hand'], ['held', 'Held'], ['sold_not_packed', 'Sold, not packed'], ['available', 'Available'],
-    ['floor_tiktok', 'Floor (TikTok)'], ['floor_whatnot', 'Floor (Whatnot)'], ['value_cents', 'Value at cost'], ['last_received', 'Last received'], ['sold_30', 'Sold 30d']];
-  const draw = () => {
-    let rows = stock.filter(s => (!q.brand || s.brand === q.brand) && (!q.bin || s.bin === q.bin) &&
-      (!q.q || [s.sku, s.name, s.brand, s.model, s.color_code, s.color_name].join(' ').toLowerCase().includes(q.q.toLowerCase())));
-    rows.sort((a, b) => { const x = a[q.sort], y = b[q.sort]; return (x === y ? 0 : x === null || x === undefined ? 1 : y === null || y === undefined ? -1 : x > y ? 1 : -1) * q.dir; });
-    $('#stbl').innerHTML = `<tr>${cols.map(([k, l]) => `<th data-sort="${k}" style="cursor:pointer;white-space:nowrap">${l}${q.sort === k ? (q.dir > 0 ? ' ↑' : ' ↓') : ''}</th>`).join('')}</tr>
-      ${rows.map(s => `<tr data-sku="${s.sku}" style="cursor:pointer"><td class="mono">${s.sku}</td>
-        <td><div class="row" style="flex-wrap:nowrap">${s.image_url ? `<img src="${esc(s.image_url)}" alt="" style="width:36px;height:36px;object-fit:cover;border-radius:6px">` : ''}
-          <div><b>${esc(s.name || s.brand + ' ' + s.model)}</b><div class="muted small">${esc(s.brand)} ${esc(s.model)} · ${esc(s.color_code)} · ${esc(s.lens_size)}</div></div></div></td>
-        <td>${esc(s.bin || '—')}</td><td>${s.on_hand}</td><td>${s.held}</td><td>${s.sold_not_packed}</td>
-        <td>${s.available}${s.available > 0 && s.available <= s.low_stock_effective ? ' <span class="tag off">Low</span>' : ''}</td>
-        <td class="mono">${s.floor_tiktok === null ? '—' : money(s.floor_tiktok)}</td><td class="mono">${s.floor_whatnot === null ? '<span class="muted">not set</span>' : money(s.floor_whatnot)}</td>
-        <td class="mono">${money(s.value_cents)}</td><td class="small">${esc(s.last_received || '—')}</td><td>${s.sold_30}</td></tr>`).join('') || `<tr><td colspan="${cols.length}" class="muted">Nothing matches.</td></tr>`}`;
-    el.querySelectorAll('[data-sort]').forEach(th => th.onclick = () => { if (q.sort === th.dataset.sort) q.dir *= -1; else { q.sort = th.dataset.sort; q.dir = 1; } draw(); });
-    el.querySelectorAll('[data-sku]').forEach(tr => tr.onclick = () => skuDrawer(tr.dataset.sku, () => invStock(el)));
-  };
-  el.innerHTML = `${low.length || out.length ? `<div class="panel"><h2>Alerts</h2>
-      ${low.length ? `<div class="note warn"><b>Low stock:</b> ${low.map(s => `${s.sku} (${s.available} left)`).join(', ')}</div>` : ''}
-      ${out.length ? `<div class="note bad"><b>Out of stock:</b> ${out.map(s => s.sku).join(', ')}</div>` : ''}
-      <p class="muted small">"Remove the stage sample" alerts and show suggestions start once Shows are built.</p></div>` : ''}
-    <div class="panel"><div class="head"><div><h2>Stock</h2><div class="muted small">${stock.length} SKUs · ${totals.units} units · ${money(totals.value)} at cost</div></div>
-      <div class="row"><select id="exl" class="inp"><option value="">Full inventory</option>${lists.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select>
-      <button class="btn" id="exw">Export for Whatnot</button></div></div>
-      <div class="row" style="margin-bottom:12px"><input id="sq" class="inp" placeholder="Search SKU, name, model, color…" style="flex:1;min-width:200px" value="${esc(q.q)}">
-        <select id="sb" class="inp"><option value="">All brands</option>${brands.map(b => `<option ${b === q.brand ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>
-        <select id="sbin" class="inp"><option value="">All bins</option>${bins.map(b => `<option ${b === q.bin ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select></div>
-      <div style="overflow-x:auto"><table id="stbl"></table></div>
-      <p class="muted small">Floors use the highest unit cost in stock and round up to a whole dollar. Held and sold-not-packed fill in once Shows are built.</p></div>`;
-  $('#sq').oninput = () => { q.q = $('#sq').value; draw(); };
-  $('#sb').onchange = () => { q.brand = $('#sb').value; draw(); };
-  $('#sbin').onchange = () => { q.bin = $('#sbin').value; draw(); };
-  $('#exw').onclick = () => whatnotExport($('#exl').value ? Number($('#exl').value) : null);
-  draw();
-}
-
-async function skuDrawer(sku, done) {
-  const h = await rpc('tfd_sku_history', { p_sku: sku });
-  const p = h.product;
-  const KIND = { receipt: 'Received', adjust_out: 'Removed', adjust_in: 'Added', bin_move: 'Bin move', verify: 'Bin verify', receipt_undo: 'Receipt undone', adjust_undo: 'Adjustment undone' };
-  const inp = (id, label, val, extra = '') => `<label class="f">${label}<input id="${id}" class="inp" value="${esc(val ?? '')}" ${extra}></label>`;
-  const m = modal(`<h2>SKU ${p.sku}</h2><p class="muted">${esc(p.brand)} ${esc(p.model)} · ${esc(p.color_code)} · ${esc(p.lens_size)} · bin ${esc(p.bin || '—')} · ${p.on_hand} on hand</p>
-    ${p.image_url ? `<img src="${esc(p.image_url)}" alt="" style="max-width:160px;border-radius:8px">` : ''}
-    <div class="grid">${inp('pn', 'Product name', p.name)}${inp('pcn', 'Color name', p.color_name)}${inp('pr', 'Retail price ($)', dl(p.retail_cents), 'type="number" step="0.01"')}
-      ${inp('pw', 'Weight (oz)', p.weight_oz, 'type="number" step="0.01"')}${inp('pc', 'Category', p.category)}${inp('ps', 'Subcategory', p.subcategory)}
-      ${inp('pu', 'UPC', p.upc)}${inp('pi', 'Image URL', p.image_url)}${inp('psp', 'Specs', p.specs)}${inp('pl', 'Low-stock threshold (blank = default)', p.low_stock, 'type="number" min="0"')}</div>
-    <div class="err" id="pe"></div><div class="actions"><button class="btn" id="plab">Print label</button><button class="btn primary" id="psave">Save details</button></div>
-    <h3>Cost layers (FIFO)</h3><table><tr><th>Received</th><th>Unit cost</th><th>In</th><th>Left</th></tr>
-      ${h.layers.map(c => `<tr><td class="small">${when(c.created_at)}${c.receipt ? ' · receipt #' + c.receipt : ' · count up'}</td><td class="mono">${money(c.unit_cost_cents)}</td><td>${c.qty_in}</td><td>${c.qty_remaining}</td></tr>`).join('')}</table>
-    <h3>History</h3><table><tr><th>When</th><th>What</th><th>Qty</th><th>Who</th></tr>
-      ${h.moves.map(x => `<tr><td class="small">${when(x.at)}</td><td>${KIND[x.kind] || esc(x.kind)}${x.reason ? ` <span class="muted small">(${esc(x.reason)})</span>` : ''}${x.detail && x.detail.to ? ` <span class="muted small">→ ${esc(x.detail.to)}</span>` : ''}${x.receipt_id ? ` <span class="muted small">#${x.receipt_id}</span>` : ''}</td>
-        <td>${x.qty > 0 ? '+' : ''}${x.qty || ''}</td><td>${esc(x.actor)}</td></tr>`).join('')}</table>`);
-  m.querySelector('.modal').style.maxWidth = '760px';
-  m.querySelector('#plab').onclick = () => printLabels([{ sku: p.sku, name: p.name || `${p.brand} ${p.model}`, qty: 1 }]);
-  m.querySelector('#psave').onclick = async () => {
-    try {
-      const r = await rpc('tfd_product_update', { p_sku: sku, p_fields: { name: $('#pn').value, color_name: $('#pcn').value, retail_cents: dollarsIn($('#pr').value), weight_oz: $('#pw').value,
-        category: $('#pc').value, subcategory: $('#ps').value, upc: $('#pu').value, image_url: $('#pi').value, specs: $('#psp').value, low_stock: intIn($('#pl').value, 'Threshold') } });
-      toast(r.unchanged ? 'No changes' : 'Saved'); m.remove(); done();
-    } catch (e) { m.querySelector('#pe').textContent = e.message; }
-  };
 }
 
 async function whatnotExport(listId) {
@@ -379,7 +650,7 @@ async function invLists(el) {
 
 function listModal(l, stock, done) {
   const v = l || { name: '', kind: 'rule', rule: {}, pct: null, skus: [] };
-  const brands = (S_inv.settings?.lists?.brands) || [];
+  const brands = INV.fv.brand || [];
   const ru = v.rule || {};
   const csv = a => (a || []).join(', ');
   const m = modal(`<h2>${l ? 'Edit list' : 'New list'}</h2>
@@ -387,14 +658,14 @@ function listModal(l, stock, done) {
       <label class="f">Type<select id="lk" class="inp"><option value="rule" ${v.kind === 'rule' ? 'selected' : ''}>Rule (updates itself)</option><option value="manual" ${v.kind === 'manual' ? 'selected' : ''}>Hand-picked SKUs</option></select></label>
       <label class="f">% of each SKU's units (blank = all)<input id="lp" class="inp" type="number" min="1" max="100" value="${v.pct ?? ''}"></label></div>
     <div id="lrule"><h3>Rule</h3><p class="muted small">Leave a field blank to include everything. Lists of values are comma-separated.</p>
-      <div class="row">${brands.map(b => `<label class="small"><input type="checkbox" data-br="${esc(b)}" ${(ru.brands || []).some(x => x.toLowerCase() === b.toLowerCase()) ? 'checked' : ''}> ${esc(b)}</label>`).join('') || '<span class="muted small">Add brands in Settings → Lists.</span>'}</div>
+      <div class="row">${brands.map(b => `<label class="small"><input type="checkbox" data-br="${esc(b)}" ${(ru.brands || []).some(x => x.toLowerCase() === b.toLowerCase()) ? 'checked' : ''}> ${esc(b)}</label>`).join('') || '<span class="muted small">Brands show up here once you receive them in a lot.</span>'}</div>
       <div class="grid" style="margin-top:10px">
         <label class="f">Categories<input id="rc" class="inp" value="${esc(csv(ru.categories))}"></label><label class="f">Subcategories<input id="rsc" class="inp" value="${esc(csv(ru.subcategories))}"></label>
-        <label class="f">Suppliers<input id="rsu" class="inp" value="${esc(csv(ru.suppliers))}"></label><label class="f">Receipt #s<input id="rre" class="inp" value="${esc(csv(ru.receipts))}"></label>
+        <label class="f">Suppliers<input id="rsu" class="inp" value="${esc(csv(ru.suppliers))}"></label><label class="f">Lot #s<input id="rre" class="inp" value="${esc(csv(ru.receipts))}"></label>
         <label class="f">Retail from ($)<input id="rr1" class="inp" type="number" step="0.01" value="${dl(ru.retail_min)}"></label><label class="f">Retail to ($)<input id="rr2" class="inp" type="number" step="0.01" value="${dl(ru.retail_max)}"></label>
         <label class="f">On hand at least<input id="rq1" class="inp" type="number" min="0" value="${ru.qty_min ?? ''}"></label><label class="f">On hand at most<input id="rq2" class="inp" type="number" min="0" value="${ru.qty_max ?? ''}"></label></div></div>
     <div id="lman"><h3>SKUs</h3><textarea id="lsk" class="inp" rows="5" style="width:100%" placeholder="One SKU per line, or comma-separated">${esc((v.skus || []).join('\n'))}</textarea>
-      <p class="muted small">${stock.length} SKUs in stock. You can also add SKUs to lists while receiving.</p></div>
+      <p class="muted small">${stock.length} SKUs in stock. </p></div>
     <div class="err" id="lerr"></div><div class="actions">${l ? '<button class="btn danger" id="ldel">Delete list</button>' : ''}<button class="btn primary" id="lsv">Save list</button></div>`);
   const sync = () => { const r = $('#lk').value === 'rule'; $('#lrule').classList.toggle('hidden', !r); $('#lman').classList.toggle('hidden', r); };
   $('#lk').onchange = sync; sync();
@@ -411,46 +682,6 @@ function listModal(l, stock, done) {
     } catch (e) { m.querySelector('#lerr').textContent = e.message; }
   };
   if (l) m.querySelector('#ldel').onclick = async () => { if (!confirm('Delete list "' + l.name + '"? Stock is not touched.')) return; try { await rpc('tfd_list_delete', { p_id: l.id }); m.remove(); done(); } catch (e) { toast(e.message, true); } };
-}
-
-// ================================================================ Bins
-async function invBins(el) {
-  const bins = await rpc('tfd_bins');
-  el.innerHTML = `<div class="panel"><div class="head"><div><h2>Bins</h2><p class="muted small">One bin per SKU. Each SKU sits in its own labeled bag inside its bin.</p></div>
-      <div class="row"><button class="btn" id="mv">Move SKU</button><button class="btn primary" id="nb">New bin</button></div></div>
-    <div class="grid">${bins.map(b => `<div class="panel" style="margin:0"><div class="head" style="margin-bottom:8px"><h2 style="margin:0">${esc(b.code)}</h2>
-        <button class="btn" data-ver="${esc(b.code)}" ${b.skus.length ? '' : 'disabled'}>Verify</button></div>
-      ${b.note ? `<div class="muted small">${esc(b.note)}</div>` : ''}
-      ${b.skus.map(s => `<div class="small" style="padding:4px 0;border-bottom:1px solid var(--line)"><span class="mono">${s.sku}</span> · ${esc(s.name || s.brand + ' ' + s.model)} <b style="float:right">${s.on_hand}</b></div>`).join('') || '<div class="muted small">Empty</div>'}
-      </div>`).join('') || '<p class="muted">No bins yet. They are also created automatically when you receive into a new bin code.</p>'}</div></div>`;
-  $('#nb').onclick = () => {
-    const m = modal(`<h2>New bin</h2><div class="grid"><label class="f">Code (e.g. A4)<input id="bc" class="inp"></label><label class="f">Note (optional)<input id="bn" class="inp"></label></div>
-      <div class="err" id="be"></div><div class="actions"><button class="btn primary" id="bs">Create</button></div>`);
-    m.querySelector('#bs').onclick = async () => { try { await rpc('tfd_bin_create', { p_code: $('#bc').value, p_note: $('#bn').value }); m.remove(); invBins(el); } catch (e) { m.querySelector('#be').textContent = e.message; } };
-  };
-  $('#mv').onclick = () => {
-    const m = modal(`<h2>Move SKU</h2><p class="muted small">Moves all units of the SKU. There's no partial move.</p>
-      <div class="grid"><label class="f">SKU<input id="ms" class="inp"></label><label class="f">To bin<input id="mb" class="inp" list="bnl"><datalist id="bnl">${bins.map(b => `<option value="${esc(b.code)}">`).join('')}</datalist></label></div>
-      <div class="err" id="me"></div><div class="actions"><button class="btn primary" id="mgo">Move</button></div>`);
-    m.querySelector('#mgo').onclick = async () => { try { await rpc('tfd_move_sku', { p_sku: $('#ms').value.trim(), p_bin: $('#mb').value }); m.remove(); toast('Moved'); invBins(el); } catch (e) { m.querySelector('#me').textContent = e.message; } };
-  };
-  el.querySelectorAll('[data-ver]').forEach(btn => btn.onclick = () => {
-    const b = bins.find(x => x.code === btn.dataset.ver);
-    const m = modal(`<h2>Verify bin ${esc(b.code)}</h2><p class="muted small">Count each bag and enter what's really there.</p>
-      ${b.skus.map(s => `<div class="toggle"><span><span class="mono">${s.sku}</span> · ${esc(s.name || s.brand + ' ' + s.model)}</span><input class="inp" style="width:80px" type="number" min="0" data-cnt="${s.sku}"></div>`).join('')}
-      <div id="vd"></div><div class="err" id="ve"></div><div class="actions"><button class="btn primary" id="vgo">Check counts</button></div>`);
-    const counts = () => { const o = {}; m.querySelectorAll('[data-cnt]').forEach(i => { if (i.value === '') throw new Error('Enter a count for every SKU'); o[i.dataset.cnt] = intIn(i.value, 'Count'); }); return o; };
-    m.querySelector('#vgo').onclick = async () => {
-      try {
-        const c = counts();
-        const r = await rpc('tfd_bin_verify', { p_bin: b.code, p_counts: c, p_confirm: false });
-        if (!r.differences.length) { await rpc('tfd_bin_verify', { p_bin: b.code, p_counts: c, p_confirm: true }); m.remove(); toast('All counts match. Verified.'); return invBins(el); }
-        $('#vd').innerHTML = `<div class="note warn">Differences:<br>${r.differences.map(d => `${d.sku}: app says ${d.on_hand}, counted ${d.counted} (${d.diff > 0 ? '+' : ''}${d.diff})`).join('<br>')}<br>Confirming records these as count corrections.</div>`;
-        const btn2 = m.querySelector('#vgo'); btn2.textContent = 'Confirm corrections';
-        btn2.onclick = async () => { try { await rpc('tfd_bin_verify', { p_bin: b.code, p_counts: counts(), p_confirm: true }); m.remove(); toast('Corrected'); invBins(el); } catch (e) { $('#ve').textContent = e.message; } };
-      } catch (e) { $('#ve').textContent = e.message; }
-    };
-  });
 }
 
 // ================================================================ Labels (Code 128)

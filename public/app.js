@@ -135,7 +135,7 @@ window.addEventListener('hashchange', () => S.state && S.state.me && route());
 const SECTIONS = [
   ['platforms', 'Platforms & fees'], ['pay', 'Pay rates & overtime'], ['people', 'People'], ['roles', 'Roles & access'],
   ['pricing', 'Pricing'], ['rules', 'Rules'], ['inventory', 'Inventory'], ['photos', 'Packing photos'],
-  ['backups', 'Backups'], ['security', 'Security'], ['whatnot', 'Whatnot export'], ['lists', 'Lists'],
+  ['backups', 'Backups'], ['security', 'Security'], ['whatnot', 'Whatnot export'],
 ];
 async function renderSettings() {
   const sub = location.hash.split('/')[1];
@@ -145,7 +145,7 @@ async function renderSettings() {
     <div class="settings"><nav class="side">${SECTIONS.map(([k, l]) => `<a href="#settings/${k}" class="${k === S.section ? 'on' : ''}">${l}</a>`).join('')}</nav>
     <div id="sec"></div></div>`;
   const fn = { platforms: secPlatforms, pay: secPay, people: secPeople, roles: secRoles, pricing: secPricing, rules: secRules,
-    inventory: secInventory, photos: secPhotos, backups: secBackups, security: secSecurity, whatnot: secWhatnot, lists: secLists }[S.section];
+    inventory: secInventory, photos: secPhotos, backups: secBackups, security: secSecurity, whatnot: secWhatnot }[S.section];
   await fn($('#sec'));
 }
 
@@ -346,20 +346,26 @@ function secRules(el) {
   wireHistory(el);
 }
 
-const REQ_FIELDS = [['product_name', 'Product name'], ['sku', 'SKU'], ['cost', 'Cost'], ['brand', 'Brand'], ['retail_price', 'Retail price'], ['weight', 'Weight'], ['image', 'Image'], ['bin', 'Bin'], ['quantity', 'Quantity'], ['category', 'Category'], ['subcategory', 'Subcategory']];
-const LOCKED_REQ = new Set(['sku', 'cost', 'quantity']);
+const REQ_GROUPS = [
+  ['Lot', [['supplier', 'Supplier'], ['invoice_no', 'Invoice #'], ['received_date', 'Date received'], ['lot_photo', 'At least one lot photo (box / product)']]],
+  ['Each SKU row', [['brand', 'Brand'], ['model', 'Model #'], ['color_code', 'Color code'], ['lens_size', 'Lens size'], ['upc', 'UPC'], ['name', 'Product name'],
+    ['color_name', 'Color name'], ['retail', 'Retail price'], ['weight', 'Weight'], ['image_url', 'Listing image URL'], ['category', 'Category'],
+    ['subcategory', 'Subcategory'], ['specs', 'Specs'], ['bin', 'Bin (if off, a blank bin goes to NOT_ASSIGNED)'], ['invoiced_qty', 'Invoiced qty'], ['received_qty', 'Received qty']]],
+];
 function secInventory(el) {
   const v = S.settings.settings.inventory;
   el.innerHTML = `<div class="panel"><div class="head"><h2>Inventory</h2>${historyLink('inventory')}</div>
-    <h3>Required product fields</h3><p class="muted small">SKU, cost and quantity are always required.</p>
-    ${REQ_FIELDS.map(([k, l]) => `<div class="toggle"><span>${l}</span>${sw('if_' + k, v.required_fields.includes(k)).replace('<input', LOCKED_REQ.has(k) ? '<input disabled' : '<input')}</div>`).join('')}
+    <h3>Required when confirming a lot</h3><p class="muted small">Turn on what every lot must have before you can confirm the count. Unit cost is always required (profit and floors depend on it).
+      Product fields are only checked on NEW SKUs. Matched SKUs already have them.</p>
+    ${REQ_GROUPS.map(([g, fields]) => `<h3 class="small muted" style="margin:14px 0 2px">${g}</h3>` + fields.map(([k, l]) => `<div class="toggle"><span>${l}</span>${sw('if_' + k, v.required_fields.includes(k))}</div>`).join('')).join('')}
+    <div class="toggle"><span>Unit cost</span><span class="muted small">Always required</span></div>
     <h3>Show suggestions</h3><p class="muted small">Suggest a SKU for the next show when it has fewer than X units for Y or more shows.</p>
     <div class="grid"><label class="f">Fewer than (units)${F.int('is_u', v.show_suggest_max_units)}</label><label class="f">For at least (shows)${F.int('is_s', v.show_suggest_min_shows)}</label>
     <label class="f">Default low-stock threshold (units)${F.int('is_l', v.low_stock_default)}</label></div>
     <div class="actions"><button class="btn primary" id="is">Save inventory settings</button></div></div>`;
   $('#is').onclick = e => {
     try {
-      const req = REQ_FIELDS.map(([k]) => k).filter(k => LOCKED_REQ.has(k) || $('#if_' + k).checked);
+      const req = REQ_GROUPS.flatMap(([, f]) => f.map(([k]) => k)).filter(k => $('#if_' + k).checked);
       saveSetting('inventory', { required_fields: req, show_suggest_max_units: F.read.int('is_u'), show_suggest_min_shows: F.read.int('is_s'), low_stock_default: F.read.int('is_l') }, e.target);
     } catch (err) { toast(err.message, true); }
   };
@@ -400,17 +406,6 @@ function secWhatnot(el) {
     shipping_profile: $('#wn_sp').value, offerable: $('#wn_o').value.toUpperCase(), hazmat: $('#wn_h').value, condition: $('#wn_cd').value }, e.target);
   wireHistory(el);
 }
-function secLists(el) {
-  const v = S.settings.settings.lists;
-  const ta = (id, arr) => `<textarea id="${id}" class="inp" rows="6" style="width:100%">${esc(arr.join('\n'))}</textarea>`;
-  el.innerHTML = `<div class="panel"><div class="head"><h2>Lists</h2>${historyLink('lists')}</div><p class="muted small">One per line. Brands are the fixed list used at receiving, so "Rayban" never becomes its own brand.</p>
-    <div class="grid"><label class="f">Brands${ta('ls_b', v.brands)}</label><label class="f">Suppliers${ta('ls_s', v.suppliers)}</label><label class="f">Expense categories${ta('ls_e', v.expense_categories)}</label></div>
-    <div class="actions"><button class="btn primary" id="lss">Save lists</button></div></div>`;
-  const lines = id => $('#' + id).value.split('\n').map(s => s.trim()).filter(Boolean);
-  $('#lss').onclick = e => saveSetting('lists', { brands: lines('ls_b'), suppliers: lines('ls_s'), expense_categories: lines('ls_e') }, e.target);
-  wireHistory(el);
-}
-
 // ---------------- activity log ----------------
 async function renderActivity() {
   const q = S.actQ || {};

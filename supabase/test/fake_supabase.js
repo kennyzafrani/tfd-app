@@ -7,7 +7,7 @@ const { execFileSync } = require('node:child_process'); const crypto = require('
 const [SOCK, DB, PORT] = process.argv.slice(2);
 const WEB = path.resolve(__dirname, '../..');
 const SERVICE = 'sb_secret_test', ANON = 'sb_publishable_test';
-const passwords = new Map(); // email -> {id, password}
+const passwords = new Map(); const FILES = new Map(); // email -> {id, password}
 
 function sql(q, role, sub) {
   const pre = [role ? `set role ${role};` : '', sub ? `select set_config('request.jwt.claim.sub', '${sub}', false) \\g /dev/null` : ''].join('\n');
@@ -55,6 +55,18 @@ async function supabase(req, res, url) {
     }
     if (req.method === 'PUT') { const b = await body(req); for (const u of passwords.values()) if (u.id === id) u.password = b.password; return json(res, 200, {}); }
     if (req.method === 'DELETE') { for (const [k, u] of passwords) if (u.id === id) passwords.delete(k); sql(`delete from auth.users where id = ${lit(id)}`); return json(res, 200, {}); }
+  }
+  if (p.startsWith('/storage/v1/object/sign/')) {
+    const b = await body(req); const t = bearer(req);
+    const ok = sql('select tfd_is_admin()', 'authenticated', t); if (!ok.ok || ok.out !== 't') return json(res, 403, { message: 'not allowed' });
+    return json(res, 200, b.paths.map(x => ({ path: x, signedURL: '/object/fake/' + x + '?token=x' })));
+  }
+  if (p.startsWith('/storage/v1/object/fake/')) { const k = p.slice('/storage/v1/object/fake/'.length); const f = FILES.get(k); if (!f) return json(res, 404, {}); res.writeHead(200, { 'Content-Type': 'image/jpeg' }); return res.end(f); }
+  if (p.startsWith('/storage/v1/object/lot-photos/') && req.method === 'POST') {
+    const t = bearer(req); const ok = sql('select tfd_is_admin()', 'authenticated', t);
+    if (!ok.ok || ok.out !== 't') return json(res, 403, { message: 'new row violates row-level security policy' });
+    const chunks = []; for await (const c of req) chunks.push(c); FILES.set(p.slice('/storage/v1/object/lot-photos/'.length), Buffer.concat(chunks));
+    return json(res, 200, { Key: p });
   }
   if (p.startsWith('/rest/v1/rpc/')) {
     const fn = p.split('/').pop(); const b = await body(req); const t = bearer(req);
