@@ -622,8 +622,8 @@ function downloadCSV(name, header, rows) {
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 
-async function whatnotExport(listId) {
-  const d = await rpc('tfd_whatnot_export', { p_list_id: listId });
+async function whatnotExport(listId, preloaded) {
+  const d = preloaded || await rpc('tfd_whatnot_export', { p_list_id: listId });
   const w = d.settings;
   const blank = [['type', 'Type'], ['shipping_profile', 'Shipping Profile'], ['offerable', 'Offerable'], ['hazmat', 'Hazmat'], ['condition', 'Condition']].filter(([k]) => !w[k]);
   const noFloor = w.price_source === 'floor' && d.rows.some(r => r.floor_whatnot === null);

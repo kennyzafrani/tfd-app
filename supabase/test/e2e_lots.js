@@ -35,7 +35,8 @@ const ok = (c, m) => { if (!c) throw new Error('FAILED: ' + m); console.log('ok 
     'Designer Eyes,INV-1042,2026-11-10,Oakley,OO9208,,,,,,2,,70.00,,,,,,,'].join('\r\n'));
   await page.click('#newr'); await page.setInputFiles('#rf', csv); await page.click('#rgo');
   await page.waitForSelector('#lgrid');
-  ok((await page.textContent('#lname')).includes('Designer Eyes · INV-1042 · 2026-11-10'), 'lot named supplier · invoice · date');
+  const today = await page.evaluate(() => new Date().toLocaleDateString('en-CA'));
+  ok((await page.textContent('#lname')).includes('Designer Eyes · INV-1042 · ' + today), 'lot named supplier · invoice · date');
   await page.waitForSelector('#confirm');
   ok(await page.isDisabled('#confirm'), 'confirm disabled while issues remain');
   const issues = await page.textContent('#issues');
