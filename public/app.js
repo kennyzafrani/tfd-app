@@ -118,9 +118,9 @@ function route() {
   const allowed = TABS.filter(t => t.can(p));
   let id = location.hash.slice(1).split('/')[0] || allowed[0]?.id;
   if (!allowed.find(t => t.id === id)) id = allowed[0]?.id;
-  $('#app').innerHTML = `<div class="top"><div class="brand">THE FRAME DROP</div>
+  $('#app').innerHTML = `<div class="shell"><aside class="top"><div class="brand">THE FRAME DROP</div>
     <nav class="tabs">${allowed.map(t => `<a href="#${t.id}" class="${t.id === id ? 'on' : ''}">${t.label}</a>`).join('')}</nav>
-    <div class="who">${esc(S.state.me.name)} · ${esc(S.state.me.role)}<button id="lock">Sign out</button></div></div><main id="main"></main>`;
+    <div class="who"><span>${esc(S.state.me.name)} · ${esc(S.state.me.role)}</span><button id="lock">Sign out</button></div></aside><main id="main"></main></div>`;
   $('#lock').onclick = async () => { await signOut(); await boot(); };
   const tab = TABS.find(t => t.id === id);
   if (id === 'settings') return renderSettings();
@@ -347,9 +347,9 @@ function secRules(el) {
 }
 
 const REQ_GROUPS = [
-  ['Lot', [['supplier', 'Supplier'], ['invoice_no', 'Invoice #'], ['received_date', 'Date received'], ['lot_photo', 'At least one lot photo (box / product)']]],
+  ['Lot', [['supplier', 'Supplier'], ['invoice_no', 'Invoice #'], ['received_date', 'Date received']]],
   ['Each SKU row', [['brand', 'Brand'], ['model', 'Model #'], ['color_code', 'Color code'], ['lens_size', 'Lens size'], ['upc', 'UPC'], ['name', 'Product name'],
-    ['color_name', 'Color name'], ['retail', 'Retail price'], ['weight', 'Weight'], ['image_url', 'Listing image URL'], ['category', 'Category'],
+    ['color_name', 'Color name'], ['retail', 'Retail price'], ['weight', 'Weight'], ['image_url', 'Listing image URL'], ['lot_photo', 'Lot image (internal photo of the item / box, per row)'], ['category', 'Category'],
     ['subcategory', 'Subcategory'], ['specs', 'Specs'], ['bin', 'Bin (if off, a blank bin goes to NOT_ASSIGNED)'], ['invoiced_qty', 'Invoiced qty'], ['received_qty', 'Received qty']]],
 ];
 function secInventory(el) {

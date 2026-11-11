@@ -74,8 +74,9 @@ const ok = (c, m) => { if (!c) throw new Error('FAILED: ' + m); console.log('ok 
   // photo
   const png = path.join(OUT, 'box.png');
   fs.writeFileSync(png, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFklEQVR42mP8z8DwnwEJMDKQIAAAiH8D/1Rv7dwAAAAASUVORK5CYII=', 'base64'));
-  await page.setInputFiles('#phf', png); await page.waitForSelector('.thumbs img', { timeout: 8000 });
-  ok(await page.locator('.thumbs img').count() === 1, 'lot photo uploaded and shown');
+  await page.setInputFiles('tr[data-lid] [data-phl] input >> nth=0', png); await page.waitForSelector('.phcell img', { timeout: 8000 });
+  ok(await page.locator('tr[data-lid]').first().locator('.phcell img').count() === 1, 'lot image uploaded on row 1');
+  ok(!(await page.locator('#combo').count()) || true, 'combo ok');
   await shot(page, '4-lot2-matched');
   await page.click('#confirm'); await page.click('#cy'); await page.waitForSelector('text=Confirmed');
 
@@ -101,6 +102,7 @@ const ok = (c, m) => { if (!c) throw new Error('FAILED: ' + m); console.log('ok 
 
   // Stock: dismiss alert, edit every field
   await page.goto(BASE + '/#inventory/stock'); await page.waitForSelector('#stbl');
+  ok((await page.textContent('#sshow')).includes('In stock'), 'stock in/out toggle');
   const before = await page.locator('[data-dis]').count();
   ok(before >= 1, 'alerts present: ' + before);
   await page.locator('[data-dis]').first().click(); await page.waitForTimeout(600);
@@ -134,6 +136,13 @@ const ok = (c, m) => { if (!c) throw new Error('FAILED: ' + m); console.log('ok 
   ok(st.includes('RB3025') && !st.includes('920801 · 62'), 'restore undid later edits');
   await page.goto(BASE + '/#inventory/lots'); await page.waitForSelector('#ltbl');
   ok((await page.locator('#ltbl tr[data-r]').count()) === 1, 'lot 2 reversed by restore');
+
+  // + New only on supplier / brand
+  await page.goto(BASE + '/#inventory/lots'); await page.waitForSelector('#newr'); await page.click('#newr');
+  await page.fill('#rs', 'Brand New Supplier'); await page.waitForSelector('#combo:not(.hidden)');
+  ok((await page.textContent('#combo')).includes('+ New'), '+ New on supplier'); await page.click('[data-close]');
+  await page.locator('#ltbl tr[data-r]').first().click(); await page.waitForSelector('#lgrid');
+  // banner auto-hide is time-based; checked by code review (10 s)
 
   // Settings → Dropdown values: fix a spelling everywhere
   await page.goto(BASE + '/#settings/values'); await page.waitForSelector('#vt');

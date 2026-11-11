@@ -39,7 +39,7 @@ function comboOpen(input) {
   const hits = all.filter(v => !lc || String(v).toLowerCase().includes(lc)).slice(0, 60);
   const exact = all.some(v => String(v).toLowerCase() === lc);
   COMBO.items = hits.map(v => ({ v, label: esc(v) }));
-  if (typed && !exact) COMBO.items.push({ v: typed, label: `+ New ${esc(key === 'bin' ? 'bin' : 'value')}: “${esc(typed)}”`, isNew: true });
+  if (typed && !exact && (key === 'supplier' || key === 'brand')) COMBO.items.push({ v: typed, label: `+ New ${esc(key === 'bin' ? 'bin' : 'value')}: “${esc(typed)}”`, isNew: true });
   if (!COMBO.items.length) return comboClose();
   COMBO.on = -1;
   COMBO.el.innerHTML = COMBO.items.map((it, i) => `<div data-i="${i}" class="${it.isNew ? 'new' : ''}">${it.label}</div>`).join('');
@@ -80,13 +80,13 @@ function shrinkImage(file, max = 1600) {
     img.src = URL.createObjectURL(file);
   });
 }
-async function uploadLotPhoto(lotId, file) {
+async function uploadLotPhoto(lotId, file, lineId) {
   const blob = await shrinkImage(file);
   const path = `lot-${lotId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
   const t = await token();
   const r = await fetch(`${CFG.url}/storage/v1/object/lot-photos/${path}`, { method: 'POST', headers: { apikey: CFG.anonKey, Authorization: 'Bearer ' + t, 'Content-Type': 'image/jpeg' }, body: blob });
   if (!r.ok) throw new Error('Photo upload failed: ' + ((await r.json().catch(() => ({}))).message || r.status));
-  await rpc('tfd_lot_photo_add', { p_receipt_id: lotId, p_path: path });
+  await rpc('tfd_line_photo_add', { p_receipt_id: lotId, p_line_id: lineId, p_path: path });
 }
 async function signPhotos(paths) {
   if (!paths.length) return {};
@@ -96,23 +96,25 @@ async function signPhotos(paths) {
   const out = {}; (Array.isArray(d) ? d : []).forEach(x => { if (x.signedURL) out[x.path] = CFG.url + '/storage/v1' + x.signedURL; });
   return out;
 }
-async function photosPanel(box, r, reload) {
+// one cell per SKU row: thumbnails + add button. Internal only (not the listing image).
+async function fillPhotoCells(root, r, reload) {
   const urls = await signPhotos(r.photos.map(p => p.path)).catch(() => ({}));
   const req = (r.required || []).includes('lot_photo');
-  box.innerHTML = `<div class="head" style="margin-bottom:8px"><div><h2 style="margin:0">Lot photos ${req ? '<span class="req">*</span>' : ''}</h2>
-      <div class="muted small">Internal only: the box it came in, the invoice, what the product looked like. Not used in listings.</div></div>
-      <label class="btn">Add photos<input type="file" id="phf" accept="image/*" multiple class="hidden"></label></div>
-    <div class="thumbs">${r.photos.map(p => `<div class="ph"><img src="${esc(urls[p.path] || '')}" alt="Lot photo" data-big="${esc(urls[p.path] || '')}">
-      <button class="x" data-phdel="${p.id}" title="Remove photo">×</button></div>`).join('') || '<span class="muted small">No photos yet.</span>'}</div>`;
-  box.querySelector('#phf').onchange = async e => {
-    const files = [...e.target.files]; if (!files.length) return;
-    toast(`Uploading ${files.length} photo(s)…`);
-    try { for (const f of files) await uploadLotPhoto(r.id, f); toast('Photos added'); reload(); } catch (err) { toast(err.message, true); }
-  };
-  box.querySelectorAll('[data-big]').forEach(i => i.onclick = () => { const m = modal(`<img src="${i.dataset.big}" alt="Lot photo" style="width:100%;border-radius:8px">`); m.querySelector('.modal').style.maxWidth = '900px'; });
-  box.querySelectorAll('[data-phdel]').forEach(b => b.onclick = async () => {
-    if (!confirm('Remove this photo from the lot?')) return;
-    try { await rpc('tfd_lot_photo_delete', { p_id: Number(b.dataset.phdel) }); reload(); } catch (e) { toast(e.message, true); }
+  root.querySelectorAll('[data-phl]').forEach(td => {
+    const lid = Number(td.dataset.phl), mine = r.photos.filter(p => p.line_id === lid);
+    td.innerHTML = `<div class="phcell ${req && !mine.length && r.status === 'draft' ? 'bad' : ''}" title="${req && !mine.length ? 'Lot image is required' : 'Lot image: photo of the item / box (internal)'}">
+      ${mine.map(p => `<img src="${esc(urls[p.path] || '')}" alt="Lot image" data-big="${esc(urls[p.path] || '')}" data-phid="${p.id}">`).join('')}
+      <label class="phadd" title="Add lot image">+<input type="file" accept="image/*" multiple></label></div>`;
+    td.querySelector('input').onchange = async e => {
+      const files = [...e.target.files]; if (!files.length) return;
+      toast(`Uploading ${files.length} image(s)…`);
+      try { for (const f of files) await uploadLotPhoto(r.id, f, lid); toast('Lot image added'); reload(); } catch (err) { toast(err.message, true); }
+    };
+    td.querySelectorAll('[data-big]').forEach(i => i.onclick = () => {
+      const m = modal(`<img src="${i.dataset.big}" alt="Lot image" style="width:100%;border-radius:8px"><div class="actions"><button class="btn danger" id="phdel">Remove this image</button></div>`);
+      m.querySelector('.modal').style.maxWidth = '900px';
+      m.querySelector('#phdel').onclick = async () => { try { await rpc('tfd_lot_photo_delete', { p_id: Number(i.dataset.phid) }); m.remove(); reload(); } catch (e) { toast(e.message, true); } };
+    });
   });
 }
 
@@ -237,24 +239,23 @@ async function lotView(el, id) {
       <label class="f"><span>Invoice # ${req.has('invoice_no') ? '<span class="req">*</span>' : ''}</span><input id="hi" class="inp" value="${esc(r.invoice_no || '')}" ${draft ? '' : 'disabled'}></label>
       <label class="f"><span>Date received ${req.has('received_date') ? '<span class="req">*</span>' : ''}</span><input id="hd" class="inp" type="date" value="${esc(r.received_date)}" ${draft ? '' : 'disabled'}></label></div>
     <p class="muted small">${r.source_file ? `Imported from ${esc(r.source_file)} · ` : ''}Started by ${esc(r.created_by)}${r.confirmed_at ? ` · confirmed by ${esc(r.confirmed_by)} ${when(r.confirmed_at)}` : ''}</p></div>
-    <div class="panel" id="photos"></div>
     <div class="panel"><div class="head"><div><h2 style="margin:0">SKUs <span class="muted small">(${r.lines.length} row${r.lines.length === 1 ? '' : 's'})</span></h2>
         <div class="muted small">${draft ? 'Type straight into the grid. Scroll right for every field. <span class="req">*</span> = required. Red = needs fixing.' : 'Everything entered for this lot, as confirmed.'}</div></div>
       ${draft ? '<div class="row"><button class="btn hidden" id="matchall"></button><button class="btn" id="addl">Add row</button></div>' : ''}</div>
       <div class="lotwrap"><table class="lot" id="lgrid"></table></div>
       ${draft ? '<div id="issues"></div>' : ''}</div>`;
   const reload = () => lotView(el, id);
-  photosPanel($('#photos'), r, reload);
   let nameEdited = false;
   $('#hn').oninput = () => { nameEdited = true; };
 
   if (!draft) {
     $('#hn').onchange = async () => { try { const x = await rpc('tfd_lot_header', { p_id: id, p_supplier: r.supplier, p_invoice_no: r.invoice_no, p_date: r.received_date, p_name: $('#hn').value }); toast('Renamed'); $('#lname').firstChild.textContent = x.name + ' '; } catch (e) { toast(e.message, true); } };
     $('#labels').onclick = () => printLabels(r.lines.filter(l => l.result_sku).map(l => ({ sku: l.result_sku, name: l.name || `${l.brand || ''} ${l.model || ''}`, qty: l.received_qty })));
-    $('#lgrid').innerHTML = `<tr><th class="stk0">#</th><th class="stk1">SKU</th>${LOT_COLS.map(c => `<th>${c[1]}</th>`).join('')}</tr>
+    $('#lgrid').innerHTML = `<tr><th class="stk0">#</th><th class="stk1">SKU</th>${LOT_COLS.map(c => `<th>${c[1]}</th>`).join('')}<th>Lot image</th></tr>
       ${r.lines.map(l => `<tr><td class="stk0">${l.line_no}</td><td class="stk1">${l.result_sku ? `<a href="#" data-sku="${l.result_sku}" class="mono"><b>${l.result_sku}</b></a>` : '<span class="muted small">no SKU (0 received)</span>'}
         ${l.received_qty !== null && l.invoiced_qty !== null && l.received_qty !== l.invoiced_qty ? `<div class="small" style="color:var(--bad)">${l.received_qty < l.invoiced_qty ? 'Short' : 'Over'} by ${Math.abs(l.received_qty - l.invoiced_qty)}</div>` : ''}</td>
-        ${LOT_COLS.map(c => `<td class="ro">${esc(c[2] === 'money' ? (l[c[0]] === null ? '' : money(l[c[0]])) : (l[c[0]] ?? ''))}</td>`).join('')}</tr>`).join('')}`;
+        ${LOT_COLS.map(c => `<td class="ro">${esc(c[2] === 'money' ? (l[c[0]] === null ? '' : money(l[c[0]])) : (l[c[0]] ?? ''))}</td>`).join('')}<td data-phl="${l.id}"></td></tr>`).join('')}`;
+    fillPhotoCells($('#lgrid'), r, reload);
     el.querySelectorAll('[data-sku]').forEach(a => a.onclick = e => { e.preventDefault(); skuDrawer(a.dataset.sku, reload); });
     return;
   }
@@ -267,11 +268,12 @@ async function lotView(el, id) {
   };
   ['#hn', '#hs', '#hi', '#hd'].forEach(s => $(s).addEventListener('change', saveHeader));
 
-  $('#lgrid').innerHTML = `<tr><th class="stk0">#</th><th class="stk1">Match</th>${LOT_COLS.map(c => `<th>${c[1]}${req.has(c[3]) ? ' <span class="req">*</span>' : ''}</th>`).join('')}<th></th></tr>
+  $('#lgrid').innerHTML = `<tr><th class="stk0">#</th><th class="stk1">Match</th>${LOT_COLS.map(c => `<th>${c[1]}${req.has(c[3]) ? ' <span class="req">*</span>' : ''}</th>`).join('')}<th>Lot image${req.has('lot_photo') ? ' <span class="req">*</span>' : ''}</th><th></th></tr>
     ${lines.map(l => `<tr data-lid="${l.id}"><td class="stk0">${l.line_no}</td><td class="stk1 mcell"></td>
       ${LOT_COLS.map(c => `<td><input class="cell" style="width:${c[4]}px" data-f="${c[0]}" ${c[2] === 'combo' ? `data-combo="${comboKey(c[0])}" autocomplete="off"` : ''}
         ${['int', 'num', 'money'].includes(c[2]) ? 'inputmode="decimal"' : ''} value="${esc(cellShow(c, l[c[0]]))}"></td>`).join('')}
-      <td><button class="btn sm danger" data-delrow="${l.id}" title="Delete row">×</button></td></tr>`).join('')}`;
+      <td data-phl="${l.id}"></td><td><button class="btn sm danger" data-delrow="${l.id}" title="Delete row">×</button></td></tr>`).join('')}`;
+  fillPhotoCells($('#lgrid'), r, reload);
 
   let chain = Promise.resolve();
   const refresh = async () => {
@@ -389,6 +391,7 @@ async function invAdjust(el) {
   const panel = () => {
     const s = stock.find(x => x.sku === A.sel);
     const last = INV.lastAdj ? `<div class="banner ${INV.lastAdj.dir}">${esc(INV.lastAdj.text)}</div>` : '';
+    if (INV.lastAdj && !INV.lastAdj.timer) INV.lastAdj.timer = setTimeout(() => { INV.lastAdj = null; document.querySelector('#apanel .banner')?.remove(); }, 10000);
     if (!s) { $('#apanel').innerHTML = `${last}<h2>Adjust stock</h2><p class="muted">Pick a product above.</p>`; return; }
     $('#apanel').innerHTML = `${last}<h2>Adjust stock</h2>
       <div class="note"><b class="mono">${s.sku}</b> · <b>${esc(prodLabel(s))}</b> · ${esc(prodSub(s))} · bin ${esc(s.bin || '—')} · <b>${s.on_hand}</b> on hand</div>
@@ -418,7 +421,7 @@ async function invAdjust(el) {
 // ================================================================ Stock
 async function invStock(el) {
   const [stock, lists] = await Promise.all([rpc('tfd_stock'), rpc('tfd_lists')]);
-  INV.stockQ = INV.stockQ || { q: '', brand: '', bin: '', sort: 'sku', dir: 1 };
+  INV.stockQ = INV.stockQ || { q: '', brand: '', bin: '', sort: 'sku', dir: 1, show: 'in' };
   const q = INV.stockQ;
   const brands = [...new Set(stock.map(s => s.brand).filter(Boolean))].sort(), bins = [...new Set(stock.map(s => s.bin).filter(Boolean))].sort();
   const low = stock.filter(s => s.on_hand > 0 && s.on_hand <= s.low_stock_effective && !s.low_dismissed), out = stock.filter(s => s.on_hand === 0 && !s.out_dismissed);
@@ -427,7 +430,7 @@ async function invStock(el) {
     ['floor_tiktok', 'Floor (TikTok)'], ['floor_whatnot', 'Floor (Whatnot)'], ['value_cents', 'Value at cost'], ['last_received', 'Last received'], ['sold_30', 'Sold 30d']];
   const hay = s => [s.sku, s.name, s.brand, s.model, s.color_code, s.color_name, s.lens_size, s.upc, s.category, s.subcategory, s.specs, s.bin, ...(s.lots || []), ...(s.suppliers || [])].filter(Boolean).join(' ').toLowerCase();
   const draw = () => {
-    let rows = stock.filter(s => (!q.brand || s.brand === q.brand) && (!q.bin || s.bin === q.bin) && (!q.q || hay(s).includes(q.q.toLowerCase())));
+    let rows = stock.filter(s => (q.show === 'all' || (q.show === 'in' ? s.on_hand > 0 : s.on_hand === 0)) && (!q.brand || s.brand === q.brand) && (!q.bin || s.bin === q.bin) && (!q.q || hay(s).includes(q.q.toLowerCase())));
     rows.sort((a, b) => { const x = a[q.sort], y = b[q.sort]; return (x === y ? 0 : x === null || x === undefined ? 1 : y === null || y === undefined ? -1 : x > y ? 1 : -1) * q.dir; });
     $('#stbl').innerHTML = `<tr>${cols.map(([k, l]) => `<th data-sort="${k}" style="cursor:pointer;white-space:nowrap">${l}${q.sort === k ? (q.dir > 0 ? ' ↑' : ' ↓') : ''}</th>`).join('')}</tr>
       ${rows.map(s => `<tr data-sku="${s.sku}" class="click"><td class="mono">${s.sku}</td>
@@ -448,12 +451,14 @@ async function invStock(el) {
     <div class="panel"><div class="head"><div><h2>Stock</h2><div class="muted small">${stock.length} SKUs · ${totals.units} units · ${money(totals.value)} at cost · click a row to see or edit everything</div></div>
       <div class="row"><select id="exl" class="inp"><option value="">Full inventory</option>${lists.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select>
       <button class="btn" id="exw">Export for Whatnot</button></div></div>
-      <div class="row" style="margin-bottom:12px"><input id="sq" class="inp" placeholder="Search anything: SKU, name, model, color, size, UPC, bin, lot…" style="flex:1;min-width:200px" value="${esc(q.q)}">
+      <div class="row" style="margin-bottom:12px"><div class="seg" id="sshow">${[['in', `In stock (${stock.filter(s => s.on_hand > 0).length})`], ['out', `Out of stock (${stock.filter(s => s.on_hand === 0).length})`], ['all', 'All']].map(([k, l]) => `<button data-show="${k}" class="${q.show === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+        <input id="sq" class="inp" placeholder="Search anything: SKU, name, model, color, size, UPC, bin, lot…" style="flex:1;min-width:200px" value="${esc(q.q)}">
         <select id="sb" class="inp"><option value="">All brands</option>${brands.map(b => `<option ${b === q.brand ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>
         <select id="sbin" class="inp"><option value="">All bins</option>${bins.map(b => `<option ${b === q.bin ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select></div>
       <div style="overflow-x:auto"><table id="stbl"></table></div>
       <p class="muted small">Floors use the highest unit cost in stock and round up to a whole dollar. Held and sold-not-packed fill in once Shows are built.</p></div>`;
   $('#sq').oninput = () => { q.q = $('#sq').value; draw(); };
+  el.querySelectorAll('[data-show]').forEach(b => b.onclick = () => { q.show = b.dataset.show; el.querySelectorAll('[data-show]').forEach(x => x.classList.toggle('on', x === b)); draw(); });
   $('#sb').onchange = () => { q.brand = $('#sb').value; draw(); };
   $('#sbin').onchange = () => { q.bin = $('#sbin').value; draw(); };
   $('#exw').onclick = () => whatnotExport($('#exl').value ? Number($('#exl').value) : null);
