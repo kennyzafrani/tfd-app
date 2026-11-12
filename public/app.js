@@ -463,10 +463,11 @@ function secWhatnot(el) {
   el.innerHTML = `<div class="panel"><div class="head"><h2>Whatnot export</h2>${historyLink('whatnot_export')}</div>
     <p class="muted small">Values written into every row of the Whatnot bulk-upload file. Type them exactly as Whatnot's own template expects (copy them from a row Whatnot accepted).</p>
     <div class="grid">${txt('wn_c', 'Category', v.category)}${txt('wn_s', 'Sub Category', v.subcategory)}${txt('wn_t', 'Type', v.type, 'Not set')}
-      <label class="f">Price column<select id="wn_p" class="inp"><option value="retail" ${v.price_source === 'retail' ? 'selected' : ''}>Retail price</option><option value="floor" ${v.price_source === 'floor' ? 'selected' : ''}>Floor price (Whatnot)</option></select></label>
-      ${txt('wn_sp', 'Shipping Profile', v.shipping_profile, 'Not set')}${txt('wn_o', 'Offerable', v.offerable, 'e.g. TRUE or FALSE')}${txt('wn_h', 'Hazmat', v.hazmat, 'Not set')}${txt('wn_cd', 'Condition', v.condition, 'Not set')}</div>
+      <label class="f">Starting price (Price column)<div class="affix"><span>$</span><input id="wn_p" type="number" min="0" step="1" value="${((v.start_price_cents ?? 100) / 100).toFixed(2)}" style="width:90px"></div></label>
+      ${txt('wn_sp', 'Shipping Profile', v.shipping_profile, 'Not set')}${txt('wn_o', 'Offerable', v.offerable, 'e.g. TRUE or FALSE')}${txt('wn_h', 'Hazmat', v.hazmat, 'Not set')}${txt('wn_cd', 'Condition', v.condition, 'Leave blank')}</div>
     <div class="actions"><button class="btn primary" id="wns">Save</button></div></div>`;
-  $('#wns').onclick = e => saveSetting('whatnot_export', { category: $('#wn_c').value, subcategory: $('#wn_s').value, type: $('#wn_t').value, price_source: $('#wn_p').value,
+  $('#wns').onclick = e => saveSetting('whatnot_export', { category: $('#wn_c').value, subcategory: $('#wn_s').value, type: $('#wn_t').value, price_source: v.price_source || 'retail',
+    start_price_cents: Math.round(Number($('#wn_p').value || 0) * 100),
     shipping_profile: $('#wn_sp').value, offerable: $('#wn_o').value.toUpperCase(), hazmat: $('#wn_h').value, condition: $('#wn_cd').value }, e.target);
   wireHistory(el);
 }

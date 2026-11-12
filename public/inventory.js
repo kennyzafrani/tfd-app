@@ -151,8 +151,9 @@ async function invLots(el) {
   const rs = await rpc('tfd_receipts');
   const q = INV.lotQ = INV.lotQ || { q: '', supplier: '', invoice: '', from: '', to: '', skuMin: '', skuMax: '', costMin: '', costMax: '', status: '' };
   const suppliers = [...new Set(rs.map(r => r.supplier).filter(Boolean))].sort();
+  const lsel = new Set();
   el.innerHTML = `<div class="panel"><div class="head"><div><h2>Lots</h2><div class="muted small">Each inventory upload is a lot. Nothing changes stock until you confirm the count.</div></div><div class="row">
-      <button class="btn" id="tpl">Download template</button><button class="btn primary" id="newr">New lot</button></div></div>
+      <button class="btn" id="tpl">Download template</button><button class="btn danger" id="ldel" disabled>Delete selected</button><button class="btn primary" id="newr">New lot</button></div></div>
     <div class="row" style="margin-bottom:10px"><input id="lq" class="inp" style="flex:1;min-width:220px" placeholder="Search anything in a lot: name, supplier, invoice, brand, model, UPC, SKU…" value="${esc(q.q)}">
       <button class="btn" id="lfx">Clear filters</button></div>
     <div class="grid filters">
@@ -170,17 +171,22 @@ async function invLots(el) {
       && (!q.invoice || (r.invoice_no || '').toLowerCase().includes(q.invoice.toLowerCase())) && (!q.from || r.received_date >= q.from) && (!q.to || r.received_date <= q.to)
       && (num(q.skuMin, x => r.skus >= x) ?? true) && (num(q.skuMax, x => r.skus <= x) ?? true)
       && (num(q.costMin, x => r.cost_cents >= x * 100) ?? true) && (num(q.costMax, x => r.cost_cents <= x * 100) ?? true) && (!q.status || r.status === q.status));
-    $('#ltbl').innerHTML = `<tr><th>Lot name</th><th>Supplier</th><th>Invoice</th><th>Date</th><th>SKUs</th><th>Units</th><th>Cost</th><th>Photos</th><th>Status</th></tr>
-      ${rows.map(r => `<tr data-r="${r.id}" class="click"><td><b>${esc(r.name)}</b></td><td>${esc(r.supplier || '—')}</td><td>${esc(r.invoice_no || '—')}</td><td style="white-space:nowrap">${esc(r.received_date)}</td>
+    $('#ltbl').innerHTML = `<tr><th><input type="checkbox" id="lall"></th><th>Lot name</th><th>Supplier</th><th>Invoice</th><th>Date</th><th>SKUs</th><th>Units</th><th>Cost</th><th>Photos</th><th>Status</th></tr>
+      ${rows.map(r => `<tr data-r="${r.id}" class="click"><td data-cb><input type="checkbox" data-ls="${r.id}" ${lsel.has(r.id) ? 'checked' : ''} ${r.status === 'undone' ? 'disabled' : ''}></td><td><b>${esc(r.name)}</b></td><td>${esc(r.supplier || '—')}</td><td>${esc(r.invoice_no || '—')}</td><td style="white-space:nowrap">${esc(r.received_date)}</td>
         <td>${r.skus}</td><td>${r.units}</td><td class="mono">${money(r.cost_cents)}</td><td>${r.photos || ''}</td>
         <td>${r.status === 'draft' ? '<span class="tag">Draft</span>' : r.status === 'undone' ? '<span class="tag off">Undone</span>' : 'Confirmed'}${r.discrepancies ? ` <span class="tag off">${r.discrepancies} count diff</span>` : ''}</td></tr>`).join('')
-        || `<tr><td colspan="9" class="muted">${rs.length ? 'No lots match.' : 'No lots yet. Click New lot.'}</td></tr>`}`;
-    el.querySelectorAll('[data-r]').forEach(tr => tr.onclick = () => { location.hash = '#inventory/lots/' + tr.dataset.r; });
+        || `<tr><td colspan="10" class="muted">${rs.length ? 'No lots match.' : 'No lots yet. Click New lot.'}</td></tr>`}`;
+    el.querySelectorAll('[data-r]').forEach(tr => tr.onclick = e => { if (e.target.closest('[data-cb]')) return; location.hash = '#inventory/lots/' + tr.dataset.r; });
+    const upd = () => { $('#ldel').disabled = !lsel.size; $('#ldel').textContent = lsel.size ? `Delete selected (${lsel.size})` : 'Delete selected'; };
+    el.querySelectorAll('[data-ls]').forEach(cb => cb.onchange = () => { cb.checked ? lsel.add(Number(cb.dataset.ls)) : lsel.delete(Number(cb.dataset.ls)); upd(); });
+    $('#lall').onchange = e => el.querySelectorAll('[data-ls]:not([disabled])').forEach(cb => { cb.checked = e.target.checked; cb.onchange(); });
+    upd();
   };
   $('#lq').oninput = () => { q.q = $('#lq').value; draw(); };
   ['supplier', 'invoice', 'from', 'to', 'skuMin', 'skuMax', 'costMin', 'costMax', 'status'].forEach(k => { $('#lf_' + k).oninput = $('#lf_' + k).onchange = () => { q[k] = $('#lf_' + k).value; draw(); }; });
   $('#lfx').onclick = () => { INV.lotQ = null; invLots(el); };
   $('#tpl').onclick = () => downloadCSV('TFD Lot Template.csv', TEMPLATE_COLS, []);
+  $('#ldel').onclick = () => lotDeleteModal(rs.filter(r => lsel.has(r.id)), () => invLots(el));
   $('#newr').onclick = () => {
     const m = modal(`<h2>New lot</h2><div class="grid">
       <label class="f">Supplier${comboInput('rs', 'supplier', '')}</label>
@@ -225,6 +231,16 @@ function lineFields(l) {
 }
 const candText = c => `${esc(c.sku)} · ${esc(prodSub(c) || c.name || '')}${c.upc ? ' · UPC ' + esc(c.upc) : ''} · ${c.on_hand} on hand`;
 
+function lotDeleteModal(lots, done) {
+  const conf = lots.filter(l => l.status === 'confirmed');
+  const m = modal(`<h2>Delete ${lots.length === 1 ? 'this lot' : lots.length + ' lots'}?</h2><p>${lots.map(l => esc(l.name)).join(', ')}</p>
+    ${conf.length ? `<div class="note warn"><b>${conf.length}</b> of these ${conf.length === 1 ? 'is' : 'are'} confirmed: ${conf.reduce((a, l) => a + (l.units || 0), 0)} unit(s) come back out of stock first. Blocked if any of those units already left stock or a show is holding them.</div>` : ''}
+    <p class="muted small">New SKUs a lot created are removed only if nothing else uses them; their numbers are never reused. Restorable from Versions.</p>
+    <label class="f">Reason<input id="lr" class="inp" placeholder="e.g. duplicate upload"></label><div class="err" id="le"></div>
+    <div class="actions"><button class="btn danger" id="ly">Delete</button></div>`);
+  m.querySelector('#ly').onclick = async () => { try { const x = await rpc('tfd_lot_delete', { p_ids: lots.map(l => l.id), p_reason: m.querySelector('#lr').value }); m.remove(); toast(`Deleted ${x.deleted} lot(s)`); done(); } catch (e) { m.querySelector('#le').textContent = e.message; } };
+}
+
 async function lotView(el, id) {
   const [r, fv] = await Promise.all([rpc('tfd_receipt', { p_id: id }), rpc('tfd_field_values')]);
   INV.fv = fv;
@@ -232,7 +248,7 @@ async function lotView(el, id) {
   const req = new Set(r.required || []); req.add('cost');
   el.innerHTML = `<div class="panel"><div class="head"><div style="flex:1;min-width:0"><a href="#inventory/lots" id="back" class="small">← All lots</a>
       <h2 style="margin-top:6px" id="lname">${esc(r.name)} ${draft ? '<span class="tag">Draft</span>' : r.status === 'undone' ? '<span class="tag off">Undone</span>' : '<span class="tag">Confirmed</span>'}</h2></div>
-      <div class="row">${draft ? '<button class="btn danger" id="discard">Discard draft</button>' : '<button class="btn" id="labels">Print SKU labels</button>'}</div></div>
+      <div class="row">${draft ? '<button class="btn danger" id="discard">Delete lot</button>' : '<button class="btn" id="labels">Print SKU labels</button>'}${r.status === 'confirmed' && S.state.me.role === 'admin' ? '<button class="btn" id="unc">Unconfirm (back to draft)</button><button class="btn danger" id="dell">Delete lot</button>' : ''}</div></div>
     <div class="grid">
       <label class="f">Lot name<input id="hn" class="inp" value="${esc(r.name)}"></label>
       <label class="f"><span>Supplier ${req.has('supplier') ? '<span class="req">*</span>' : ''}</span>${comboInput('hs', 'supplier', r.supplier, draft ? '' : 'disabled')}</label>
@@ -257,6 +273,17 @@ async function lotView(el, id) {
         ${LOT_COLS.map(c => `<td class="ro">${esc(c[2] === 'money' ? (l[c[0]] === null ? '' : money(l[c[0]])) : (l[c[0]] ?? ''))}</td>`).join('')}<td data-phl="${l.id}"></td></tr>`).join('')}`;
     fillPhotoCells($('#lgrid'), r, reload);
     el.querySelectorAll('[data-sku]').forEach(a => a.onclick = e => { e.preventDefault(); skuDrawer(a.dataset.sku, reload); });
+    const units = r.lines.reduce((a, l) => a + (l.result_sku ? (l.received_qty ?? l.invoiced_qty ?? 0) : 0), 0);
+    if ($('#unc')) $('#unc').onclick = () => {
+      const m = modal(`<h2>Unconfirm this lot?</h2><p><b>${units}</b> unit(s) from "${esc(r.name)}" come back out of stock and the lot goes back to a draft you can edit and confirm again.</p>
+        <ul class="small"><li>Only works if none of its units have left stock (sold, adjusted out) and no show is holding them.</li>
+        <li>New SKUs it created stay at 0, so confirming again gives the same SKU numbers.</li>
+        <li>Catalog changes and bin moves the confirm made are not undone (edit those in Stock).</li></ul>
+        <label class="f">Reason<input id="ur" class="inp" placeholder="e.g. wrong quantity on row 3"></label><div class="err" id="ue"></div>
+        <div class="actions"><button class="btn primary" id="uy">Unconfirm</button></div>`);
+      m.querySelector('#uy').onclick = async () => { try { await rpc('tfd_lot_unconfirm', { p_id: id, p_reason: m.querySelector('#ur').value }); m.remove(); toast('Back to draft'); reload(); } catch (e) { m.querySelector('#ue').textContent = e.message; } };
+    };
+    if ($('#dell')) $('#dell').onclick = () => lotDeleteModal([r], () => { location.hash = '#inventory/lots'; });
     return;
   }
 
@@ -346,10 +373,7 @@ async function lotView(el, id) {
   });
   $('#addl').onclick = () => { chain = chain.then(() => rpc('tfd_receipt_line_save', { p_receipt_id: id, p_line_id: null, p_fields: {} })).then(reload).catch(err => toast(err.message, true)); };
   $('#matchall').onclick = () => { chain = chain.then(() => rpc('tfd_lot_match_all', { p_id: id })).then(x => { toast(`Matched ${x.matched} row(s)`); return reload(); }).catch(err => toast(err.message, true)); };
-  $('#discard').onclick = () => {
-    const m = modal(`<h2>Discard this draft?</h2><p>Lot "${esc(r.name)}" and its ${lines.length} row(s) will be deleted. Stock was never changed. (It stays restorable from Versions.)</p><div class="actions"><button class="btn danger" id="dy">Discard</button></div>`);
-    m.querySelector('#dy').onclick = async () => { try { await rpc('tfd_receipt_discard', { p_id: id }); m.remove(); location.hash = '#inventory/lots'; } catch (e) { toast(e.message, true); } };
-  };
+  $('#discard').onclick = () => lotDeleteModal([{ ...r, units: lines.length }], () => { location.hash = '#inventory/lots'; });
   const confirmLot = async () => {
     await chain;
     const units = lines.reduce((a, l) => a + (l.received_qty ?? l.invoiced_qty ?? 0), 0), cost = lines.reduce((a, l) => a + (l.received_qty ?? l.invoiced_qty ?? 0) * (l.unit_cost_cents || 0), 0);
@@ -474,7 +498,7 @@ async function invStock(el) {
 async function skuDrawer(sku, done) {
   const h = await rpc('tfd_sku_history', { p_sku: sku });
   const p = h.product;
-  const KIND = { receipt: 'Received', adjust_out: 'Removed', adjust_in: 'Added', bin_move: 'Bin move', verify: 'Bin verify', receipt_undo: 'Lot undone', adjust_undo: 'Adjustment undone' };
+  const KIND = { receipt: 'Received', adjust_out: 'Removed', adjust_in: 'Added', bin_move: 'Bin move', verify: 'Bin verify', receipt_undo: 'Lot undone', adjust_undo: 'Adjustment undone', lot_unconfirm: 'Lot unconfirmed' };
   const txt = (id, label, val, extra = '') => `<label class="f">${label}<input id="${id}" class="inp" value="${esc(val ?? '')}" ${extra}></label>`;
   const cmb = (id, label, key, val) => `<label class="f">${label}${comboInput(id, key, val)}</label>`;
   const m = modal(`<h2>SKU ${p.sku}</h2><p class="muted">${esc(prodSub(p))} · <b>${p.on_hand}</b> on hand</p>
@@ -625,26 +649,27 @@ function downloadCSV(name, header, rows) {
 async function whatnotExport(listId, preloaded) {
   const d = preloaded || await rpc('tfd_whatnot_export', { p_list_id: listId });
   const w = d.settings;
-  const blank = [['type', 'Type'], ['shipping_profile', 'Shipping Profile'], ['offerable', 'Offerable'], ['hazmat', 'Hazmat'], ['condition', 'Condition']].filter(([k]) => !w[k]);
-  const noFloor = w.price_source === 'floor' && d.rows.some(r => r.floor_whatnot === null);
-  const go = async () => {
+  if (!d.rows.length) return toast('Nothing in stock to export for ' + d.list, true);
+  const blank = [['type', 'Type'], ['shipping_profile', 'Shipping Profile'], ['offerable', 'Offerable'], ['hazmat', 'Hazmat']].filter(([k]) => !w[k]);
+  const m = modal(`<h2>Export for Whatnot</h2><p>${d.rows.length} SKU(s), ${d.rows.reduce((a, r) => a + r.qty, 0)} unit(s) from ${esc(d.list)}.</p>
+    <label class="f">Starting price for every item<div class="affix"><span>$</span><input id="xp" type="number" min="0" step="1" value="${((w.start_price_cents ?? 100) / 100).toFixed(2)}" style="width:90px"></div></label>
+    <p class="muted small">Goes in the Price column. Default comes from Settings → Whatnot export. Condition is left blank.</p>
+    ${blank.length ? `<div class="note warn">These Whatnot columns are blank: <b>${blank.map(b => b[1]).join(', ')}</b>. Fill them in <a href="#settings/whatnot">Settings → Whatnot export</a> or Whatnot may reject the file.</div>` : ''}
+    <div class="err" id="xe"></div><div class="actions"><button class="btn primary" id="xg">Download file</button></div>`);
+  m.querySelector('#xg').onclick = async () => {
+    const pv = Number(m.querySelector('#xp').value);
+    if (!(pv >= 0) || m.querySelector('#xp').value === '') return m.querySelector('#xe').textContent = 'Enter a starting price';
+    const price = Math.round(pv * 100);
     const header = ['Category', 'Sub Category', 'Title', 'Description', 'Quantity', 'Type', 'Price', 'Shipping Profile', 'Offerable', 'Hazmat', 'Condition', 'Cost Per Item', 'SKU',
       'Image URL 1', 'Image URL 2', 'Image URL 3', 'Image URL 4', 'Image URL 5', 'Image URL 6', 'Image URL 7', 'Image URL 8'];
     const rows = d.rows.map(r => [r.category || w.category, r.subcategory || w.subcategory, r.name || `${r.brand} ${r.model}`,
       [r.brand, r.model, r.color_name || r.color_code, r.lens_size ? r.lens_size + 'mm' : '', r.specs].filter(Boolean).join(' · '),
-      r.qty, w.type, dl(w.price_source === 'floor' ? r.floor_whatnot : r.retail_cents), w.shipping_profile, w.offerable, w.hazmat, w.condition,
+      r.qty, w.type, dl(price), w.shipping_profile, w.offerable, w.hazmat, '',
       dl(r.cost_cents), r.sku, r.image_url || '', '', '', '', '', '', '', '']);
+    m.remove();
     downloadCSV(`Whatnot upload - ${d.list} - ${new Date().toLocaleDateString('en-CA')}.csv`, header, rows);
-    await rpc('tfd_export_logged', { p_what: 'Whatnot upload: ' + d.list, p_rows: rows.length }).catch(() => {});
+    await rpc('tfd_export_logged', { p_what: 'Whatnot upload: ' + d.list + ' at $' + (price / 100).toFixed(2), p_rows: rows.length }).catch(() => {});
   };
-  if (!d.rows.length) return toast('Nothing in stock to export for ' + d.list, true);
-  if (blank.length || noFloor) {
-    const m = modal(`<h2>Before you export</h2>
-      ${blank.length ? `<div class="note warn">These Whatnot columns are blank: <b>${blank.map(b => b[1]).join(', ')}</b>. Fill them in Settings → Whatnot export, or Whatnot may reject the file.</div>` : ''}
-      ${noFloor ? '<div class="note warn">Price is set to "floor" but Whatnot fees aren\'t set, so some prices would be blank.</div>' : ''}
-      <p>${d.rows.length} SKU(s) from ${esc(d.list)}.</p><div class="actions"><a class="btn" href="#settings/whatnot">Go to Settings</a><button class="btn primary" id="xg">Export anyway</button></div>`);
-    m.querySelector('#xg').onclick = () => { m.remove(); go(); };
-  } else go();
 }
 
 // ================================================================ Lists
