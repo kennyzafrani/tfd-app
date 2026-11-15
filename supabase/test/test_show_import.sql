@@ -49,10 +49,10 @@ select pg_temp.ok((pg_temp.ord('A1')->>'fee_cents')::int = 338, 'fee 6% of (52.0
 select pg_temp.ok((pg_temp.ord('A1')->>'commission_cents')::int = 49, 'commission 1% of (52.00 - 3.38) = 0.49');
 select pg_temp.ok(pg_temp.ord('A3')->>'state' = 'matched' and (pg_temp.ord('A3')->>'pull_part')::int = 2, 'A3 matched to Part 2 #1');
 select pg_temp.ok(pg_temp.ord('A4')->>'problem' = 'duplicate', 'second order on P1 #2 = duplicate');
-select pg_temp.ok(pg_temp.ord('A5')->>'problem' = 'before_scan', 'order placed before its scan flagged');
-select pg_temp.ok(pg_temp.ord('A6')->>'problem' = 'outside_window' and pg_temp.ord('A6')->>'state' = 'ignored', 'old order from another show ignored');
+select pg_temp.ok(pg_temp.ord('A5')->>'state' = 'matched' and pg_temp.ord('A5')->>'problem' is null, 'matched by number, time not checked');
+select pg_temp.ok(pg_temp.ord('A6')->>'problem' = 'duplicate', 'second order on P1 #1 (any time) = duplicate');
 select pg_temp.ok(pg_temp.ord('A7')->>'problem' = 'no_pull', 'no pull #9');
-select pg_temp.ok(jsonb_array_length(j->'blockers') = 2, 'blockers: needs match + early order') from rv;
+select pg_temp.ok(jsonb_array_length(j->'blockers') = 1, 'blocker: needs match') from rv;
 select pg_temp.fails(format('select tfd_show_finalize(%s)', :s), 'finalize blocked', '%need a match%');
 -- edits after the import: fee change allowed
 select pg_temp.fails(format('select tfd_pull_void(%s, ''x'')', (select (x->>'pull_id') from rv, jsonb_array_elements(j->'orders') x where x->>'order_id' = 'A1')), 'pull fixes locked once matched', '%live or ended%');
@@ -60,7 +60,7 @@ select pg_temp.fails(format('select tfd_pull_void(%s, ''x'')', (select (x->>'pul
 -- fixes
 select pg_temp.fails(format('select tfd_order_resolve(%s, ''ignore'')', (pg_temp.ord('A4')->>'id')), 'ignore needs reason', '%reason%');
 select tfd_order_resolve((pg_temp.ord('A4')->>'id')::bigint, 'ignore', null, null, 'double order, refunded');
-select tfd_order_resolve((pg_temp.ord('A5')->>'id')::bigint, 'ack');
+select tfd_order_resolve((pg_temp.ord('A6')->>'id')::bigint, 'ignore', null, null, 'test');
 select tfd_order_resolve((pg_temp.ord('A7')->>'id')::bigint, 'sku', null, '100003');
 -- the released pull can be matched back by hand: unmatch A3 then match it to the released P2 #2? (wrong on purpose, then undo)
 reset role; select id as p22 from pulls where show_id = :s and part = 2 and pull_no = 2 \gset

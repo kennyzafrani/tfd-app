@@ -111,7 +111,7 @@ async function showReview(s) {
   const mins = o => o.placed_at && o.scanned_at ? Math.round((new Date(o.scanned_at) - new Date(o.placed_at)) / 60000) : null;
   let tab = attn.length && !done ? 'attn' : 'matched';
   imp.innerHTML = `<div class="panel"><div class="head"><div><h2 style="margin:0">Step 1 · CSV ${done ? '' : '<span class="tag ok">imported</span>'}</h2>
-      <p class="muted small" style="margin:4px 0 0">${esc(r.import.file_name)} · ${T.rows} row(s) · times read as ${TZ_NAME[r.import.tz] || esc(r.import.tz)} · by ${esc(r.import.by)} ${when(r.import.at)}</p></div>
+      <p class="muted small" style="margin:4px 0 0">${esc(r.import.file_name)} · ${T.rows} row(s) · by ${esc(r.import.by)} ${when(r.import.at)}</p></div>
       <div class="row">${r.import.file_path ? '<button class="btn sm" id="cof">Original file</button>' : ''}${done ? '' : '<button class="btn sm danger" id="crm">Remove CSV</button>'}</div></div>
     <div class="grid stats">
       <div class="panel"><div class="muted small">Matched</div><b class="big">${T.units}</b></div>
