@@ -237,3 +237,5 @@ th { color: var(--muted); }
 .stats .panel { margin: 0; }
 .bci .noimg { width: 64px; height: 64px; border-radius: 8px; background: var(--head); display: grid; place-items: center; color: var(--muted); text-align: center; }
 @media (max-width: 600px) { .bci { grid-template-columns: 56px minmax(0, 1fr); } .bci > .row { grid-column: 1 / -1; } }
+
+.warnrow td { background: var(--bad-bg); }

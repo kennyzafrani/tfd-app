@@ -62,10 +62,10 @@ async function supabase(req, res, url) {
     return json(res, 200, b.paths.map(x => ({ path: x, signedURL: '/object/fake/' + x + '?token=x' })));
   }
   if (p.startsWith('/storage/v1/object/fake/')) { const k = p.slice('/storage/v1/object/fake/'.length); const f = FILES.get(k); if (!f) return json(res, 404, {}); res.writeHead(200, { 'Content-Type': 'image/jpeg' }); return res.end(f); }
-  if (p.startsWith('/storage/v1/object/lot-photos/') && req.method === 'POST') {
+  if (/^\/storage\/v1\/object\/(lot-photos|show-files)\//.test(p) && req.method === 'POST') {
     const t = bearer(req); const ok = sql('select tfd_is_admin()', 'authenticated', t);
     if (!ok.ok || ok.out !== 't') return json(res, 403, { message: 'new row violates row-level security policy' });
-    const chunks = []; for await (const c of req) chunks.push(c); FILES.set(p.slice('/storage/v1/object/lot-photos/'.length), Buffer.concat(chunks));
+    const chunks = []; for await (const c of req) chunks.push(c); FILES.set(p.replace(/^\/storage\/v1\/object\/(lot-photos|show-files)\//, ''), Buffer.concat(chunks));
     return json(res, 200, { Key: p });
   }
   if (p.startsWith('/rest/v1/rpc/')) {

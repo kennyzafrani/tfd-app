@@ -402,23 +402,21 @@ const toLocalInput = iso => { if (!iso) return ''; const d = new Date(iso); retu
 const hrs = (a, b) => (new Date(b) - new Date(a)) / 3600000;
 
 function showEnded(main, s) {
-  const admin = s.is_admin, listed = s.type === 'listed', locked = s.status === 'finalized' || s.status === 'matched';
+  const admin = s.is_admin, listed = s.type === 'listed', fin = s.status === 'finalized', locked = fin || s.status === 'matched';
   const held = s.pulls.filter(p => p.status === 'held');
   main.innerHTML = `<div class="head"><div><a href="#shows" class="small">← All shows</a><h1>${esc(s.label)} ${stageTag(s.status)}</h1>
       <p class="muted small">${platName(s.platform)} · ${listed ? 'Listed show' : 'Live mapping'} · ${esc(s.list_name)} · ${feeTxt(s.fees)}</p></div>
-      <div class="row"><button class="btn" id="dl">Download mapping file</button>${admin && !locked ? `<a class="btn" href="#shows/${s.id}/edit">Edit setup</a>` : ''}${admin && s.status === 'ended' ? '<button class="btn" id="ro">Reopen show</button>' : ''}</div></div>
+      <div class="row"><button class="btn" id="dl">Download mapping file</button>${admin && !fin ? `<a class="btn" href="#shows/${s.id}/edit">Edit setup</a>` : ''}${admin && s.status === 'ended' ? '<button class="btn" id="ro">Reopen show</button>' : ''}</div></div>
     <div class="grid stats">
       <div class="panel"><div class="muted small">${listed ? 'Wins' : 'Pulls held'}</div><b class="big">${held.length}</b></div>
       <div class="panel"><div class="muted small">Giveaways</div><b class="big">${s.counts.giveaways}</b></div>
       <div class="panel"><div class="muted small">Voided</div><b class="big">${s.counts.void}</b></div>
       <div class="panel"><div class="muted small">Parts</div><b class="big">${listed ? '—' : s.part}</b></div></div>
-    <div class="panel"><h2>Step 1 · Import the ${s.platform === 'tiktok' ? 'TikTok "To Ship"' : 'Whatnot'} CSV</h2>
-      <p class="muted">Coming in Phase 4 (import, matching to pulls, review). Until then the show waits here and its units stay held.</p></div>
-    ${admin ? `<div class="panel"><div class="head"><h2 style="margin:0">Step 2 · Hours</h2>${locked ? '' : '<button class="btn" id="addh">Add row</button>'}</div>
+    ${admin ? '<div id="imp"></div>' : `<div class="panel"><p class="muted">An admin imports the ${s.platform === 'tiktok' ? 'TikTok' : 'Whatnot'} CSV and finalizes the show.</p></div>`}
+    ${admin ? `<div class="panel"><div class="head"><h2 style="margin:0">Step 2 · Hours</h2>${fin ? '' : '<button class="btn" id="addh">Add row</button>'}</div>
       <p class="muted small">One row per stretch someone worked. Add as many rows as you need for each streamer and assistant.</p>
-      <div id="hrs"></div><div class="err" id="he"></div>${locked ? '' : '<div class="actions"><button class="btn primary" id="hs">Save hours</button></div>'}</div>` : ''}
-    <div class="panel"><h2>Step 3 · Finalize</h2><p class="muted">Finalize locks the show (fees, pay, pulls) and takes the sold units out of inventory. It arrives with the CSV import in Phase 4.</p>
-      <button class="btn primary" disabled>Finalize</button></div>
+      <div id="hrs"></div><div class="err" id="he"></div>${fin ? '' : '<div class="actions"><button class="btn primary" id="hs">Save hours</button></div>'}</div>` : ''}
+    ${admin ? '<div id="fin"></div>' : ''}
     <div class="panel"><h2>Lineup</h2>${lineupHtml(s)}</div>
     <div class="panel"><h2>${listed ? 'Wins' : 'Pulls'}</h2><div id="pl" class="plist"></div></div>`;
   $('#pl').innerHTML = s.pulls.map(p => `<div class="prow ${p.status !== 'held' ? 'void' : ''}"><div><b>${p.kind === 'win' ? 'Win #' : `P${p.part} #`}${p.pull_no}</b> <span class="mono small">${p.sku}</span> ${esc(p.name || '')}
@@ -442,17 +440,17 @@ function showEnded(main, s) {
   // ---- hours editor
   const day = toLocalInput(s.started_at || s.created_at).slice(0, 10);
   const rows = (s.shifts || []).map(h => ({ profile_id: h.profile_id, start: toLocalInput(h.start_at), end: toLocalInput(h.end_at) }));
-  if (!rows.length && !locked) s.people.forEach(p => rows.push({ profile_id: p.profile_id, start: day + 'T', end: day + 'T' }));
+  if (!rows.length && !fin) s.people.forEach(p => rows.push({ profile_id: p.profile_id, start: day + 'T', end: day + 'T' }));
   const drawH = () => {
     const tot = {};
     rows.forEach(r => { const h = r.start.length === 16 && r.end.length === 16 ? hrs(r.start, r.end) : 0; if (h > 0) tot[r.profile_id] = (tot[r.profile_id] || 0) + h; });
     $('#hrs').innerHTML = rows.length ? `<div style="overflow-x:auto"><table><tr><th>Person</th><th>Role</th><th>Start</th><th>End</th><th>Hours</th><th></th></tr>
       ${rows.map((r, i) => { const p = s.people.find(x => x.profile_id === r.profile_id); const h = r.start.length === 16 && r.end.length === 16 ? hrs(r.start, r.end) : null;
-        return `<tr><td><select class="inp" data-i="${i}" data-k="profile_id" ${locked ? 'disabled' : ''}>${s.people.map(x => `<option value="${x.profile_id}" ${x.profile_id === r.profile_id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></td>
+        return `<tr><td><select class="inp" data-i="${i}" data-k="profile_id" ${fin ? 'disabled' : ''}>${s.people.map(x => `<option value="${x.profile_id}" ${x.profile_id === r.profile_id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></td>
           <td class="small">${p ? p.role : ''}</td>
-          <td><input type="datetime-local" class="inp" data-i="${i}" data-k="start" value="${r.start.length === 16 ? r.start : ''}" ${locked ? 'disabled' : ''}></td>
-          <td><input type="datetime-local" class="inp" data-i="${i}" data-k="end" value="${r.end.length === 16 ? r.end : ''}" ${locked ? 'disabled' : ''}></td>
-          <td class="${h != null && h <= 0 ? 'bad' : ''}">${h == null ? '—' : h.toFixed(2)}</td><td>${locked ? '' : `<button class="btn sm danger" data-rm="${i}">×</button>`}</td></tr>`; }).join('')}</table></div>
+          <td><input type="datetime-local" class="inp" data-i="${i}" data-k="start" value="${r.start.length === 16 ? r.start : ''}" ${fin ? 'disabled' : ''}></td>
+          <td><input type="datetime-local" class="inp" data-i="${i}" data-k="end" value="${r.end.length === 16 ? r.end : ''}" ${fin ? 'disabled' : ''}></td>
+          <td class="${h != null && h <= 0 ? 'bad' : ''}">${h == null ? '—' : h.toFixed(2)}</td><td>${fin ? '' : `<button class="btn sm danger" data-rm="${i}">×</button>`}</td></tr>`; }).join('')}</table></div>
       <p class="small"><b>Totals:</b> ${s.people.map(p => `${esc(p.name)} ${(tot[p.profile_id] || 0).toFixed(2)}h`).join(' · ')}</p>` : '<p class="muted">No hours entered.</p>';
     $('#hrs').querySelectorAll('[data-k]').forEach(inp => inp.onchange = () => { const r = rows[Number(inp.dataset.i)]; r[inp.dataset.k] = inp.dataset.k === 'profile_id' ? Number(inp.value) : inp.value; drawH(); });
     $('#hrs').querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { rows.splice(Number(b.dataset.rm), 1); drawH(); });
@@ -465,4 +463,5 @@ function showEnded(main, s) {
     try { await rpc('tfd_show_shifts_save', { p_show: s.id, p_shifts: rows.map(r => ({ profile_id: r.profile_id, start_at: new Date(r.start).toISOString(), end_at: new Date(r.end).toISOString() })) });
       toast('Hours saved'); renderShows(); } catch (e) { $('#he').textContent = e.message; }
   };
+  showReview(s);
 }

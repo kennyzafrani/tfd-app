@@ -498,7 +498,7 @@ async function invStock(el) {
 async function skuDrawer(sku, done) {
   const h = await rpc('tfd_sku_history', { p_sku: sku });
   const p = h.product;
-  const KIND = { receipt: 'Received', adjust_out: 'Removed', adjust_in: 'Added', bin_move: 'Bin move', verify: 'Bin verify', receipt_undo: 'Lot undone', adjust_undo: 'Adjustment undone', lot_unconfirm: 'Lot unconfirmed' };
+  const KIND = { receipt: 'Received', adjust_out: 'Removed', adjust_in: 'Added', bin_move: 'Bin move', verify: 'Bin verify', receipt_undo: 'Lot undone', adjust_undo: 'Adjustment undone', lot_unconfirm: 'Lot unconfirmed', show_sale: 'Sold (show)', show_unfinalize: 'Show unfinalized' };
   const txt = (id, label, val, extra = '') => `<label class="f">${label}<input id="${id}" class="inp" value="${esc(val ?? '')}" ${extra}></label>`;
   const cmb = (id, label, key, val) => `<label class="f">${label}${comboInput(id, key, val)}</label>`;
   const m = modal(`<h2>SKU ${p.sku}</h2><p class="muted">${esc(prodSub(p))} · <b>${p.on_hand}</b> on hand</p>
