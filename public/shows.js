@@ -414,7 +414,9 @@ function showEnded(main, s) {
       <div class="panel"><div class="muted small">Parts</div><b class="big">${listed ? '—' : s.part}</b></div></div>
     ${admin ? '<div id="imp"></div>' : `<div class="panel"><p class="muted">An admin imports the ${s.platform === 'tiktok' ? 'TikTok' : 'Whatnot'} CSV and finalizes the show.</p></div>`}
     ${admin ? `<div class="panel"><div class="head"><h2 style="margin:0">Step 2 · Hours</h2>${fin ? '' : '<button class="btn" id="addh">Add row</button>'}</div>
-      <p class="muted small">One row per stretch someone worked. Add as many rows as you need for each streamer and assistant.</p>
+      <div class="row wrap" style="gap:12px;align-items:flex-end"><label class="f"><b>Show started</b><input type="datetime-local" id="sst" class="inp" ${fin ? 'disabled' : ''}></label>
+        <label class="f"><b>Show ended</b><input type="datetime-local" id="sen" class="inp" ${fin ? 'disabled' : ''}></label><div id="shr" class="small" style="padding-bottom:10px"></div></div>
+      <p class="muted small">Then one row per stretch someone worked, inside the show's time. Add as many rows as you need for each streamer and assistant.</p>
       <div id="hrs"></div><div class="err" id="he"></div>${fin ? '' : '<div class="actions"><button class="btn primary" id="hs">Save hours</button></div>'}</div>` : ''}
     ${admin ? '<div id="fin"></div>' : ''}
     <div class="panel"><h2>Lineup</h2>${lineupHtml(s)}</div>
@@ -439,9 +441,15 @@ function showEnded(main, s) {
   if (!admin) return;
   // ---- hours editor
   const day = toLocalInput(s.started_at || s.created_at).slice(0, 10);
+  $('#sst').value = toLocalInput(s.show_start_at || s.started_at || s.created_at);
+  $('#sen').value = toLocalInput(s.show_end_at || s.ended_at || '');
+  const win = () => [$('#sst').value, $('#sen').value];
   const rows = (s.shifts || []).map(h => ({ profile_id: h.profile_id, start: toLocalInput(h.start_at), end: toLocalInput(h.end_at) }));
-  if (!rows.length && !fin) s.people.forEach(p => rows.push({ profile_id: p.profile_id, start: day + 'T', end: day + 'T' }));
+  if (!rows.length && !fin) s.people.forEach(p => rows.push({ profile_id: p.profile_id, start: '', end: '' }));
   const drawH = () => {
+    const [ws, we] = win(), wok = ws.length === 16 && we.length === 16 && hrs(ws, we) > 0;
+    $('#shr').innerHTML = ws.length === 16 && we.length === 16 ? (hrs(ws, we) > 0 ? `Show hours: <b>${hrs(ws, we).toFixed(2)}</b>` : '<span style="color:var(--bad)">End must be after start</span>') : '';
+    const outside = r => wok && r.start.length === 16 && r.end.length === 16 && (r.start < ws || r.end > we);
     const tot = {};
     rows.forEach(r => { const h = r.start.length === 16 && r.end.length === 16 ? hrs(r.start, r.end) : 0; if (h > 0) tot[r.profile_id] = (tot[r.profile_id] || 0) + h; });
     $('#hrs').innerHTML = rows.length ? `<div style="overflow-x:auto"><table><tr><th>Person</th><th>Role</th><th>Start</th><th>End</th><th>Hours</th><th></th></tr>
@@ -450,17 +458,21 @@ function showEnded(main, s) {
           <td class="small">${p ? p.role : ''}</td>
           <td><input type="datetime-local" class="inp" data-i="${i}" data-k="start" value="${r.start.length === 16 ? r.start : ''}" ${fin ? 'disabled' : ''}></td>
           <td><input type="datetime-local" class="inp" data-i="${i}" data-k="end" value="${r.end.length === 16 ? r.end : ''}" ${fin ? 'disabled' : ''}></td>
-          <td class="${h != null && h <= 0 ? 'bad' : ''}">${h == null ? '—' : h.toFixed(2)}</td><td>${fin ? '' : `<button class="btn sm danger" data-rm="${i}">×</button>`}</td></tr>`; }).join('')}</table></div>
+          <td class="${h != null && h <= 0 ? 'bad' : ''}">${h == null ? '—' : h.toFixed(2)}${outside(r) ? '<div class="small" style="color:var(--bad)">outside the show</div>' : ''}</td><td>${fin ? '' : `<button class="btn sm danger" data-rm="${i}">×</button>`}</td></tr>`; }).join('')}</table></div>
       <p class="small"><b>Totals:</b> ${s.people.map(p => `${esc(p.name)} ${(tot[p.profile_id] || 0).toFixed(2)}h`).join(' · ')}</p>` : '<p class="muted">No hours entered.</p>';
     $('#hrs').querySelectorAll('[data-k]').forEach(inp => inp.onchange = () => { const r = rows[Number(inp.dataset.i)]; r[inp.dataset.k] = inp.dataset.k === 'profile_id' ? Number(inp.value) : inp.value; drawH(); });
     $('#hrs').querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { rows.splice(Number(b.dataset.rm), 1); drawH(); });
   };
   drawH();
-  if ($('#addh')) $('#addh').onclick = () => { const last = rows[rows.length - 1]; rows.push({ profile_id: last ? last.profile_id : s.people[0].profile_id, start: last && last.end.length === 16 ? last.end : day + 'T', end: day + 'T' }); drawH(); };
+  $('#sst').onchange = $('#sen').onchange = drawH;
+  if ($('#addh')) $('#addh').onclick = () => { const last = rows[rows.length - 1]; rows.push({ profile_id: last ? last.profile_id : s.people[0].profile_id, start: last && last.end.length === 16 ? last.end : '', end: '' }); drawH(); };
   if ($('#hs')) $('#hs').onclick = async () => {
     $('#he').textContent = '';
     if (rows.some(r => r.start.length !== 16 || r.end.length !== 16)) return $('#he').textContent = 'Fill in the start and end date and time on every row (or remove empty rows).';
-    try { await rpc('tfd_show_shifts_save', { p_show: s.id, p_shifts: rows.map(r => ({ profile_id: r.profile_id, start_at: new Date(r.start).toISOString(), end_at: new Date(r.end).toISOString() })) });
+    const [ws, we] = win();
+    if (ws.length !== 16 || we.length !== 16) return $('#he').textContent = 'Enter when the show started and ended.';
+    try { await rpc('tfd_show_hours_save', { p_show: s.id, p_start: new Date(ws).toISOString(), p_end: new Date(we).toISOString(),
+        p_shifts: rows.map(r => ({ profile_id: r.profile_id, start_at: new Date(r.start).toISOString(), end_at: new Date(r.end).toISOString() })) });
       toast('Hours saved'); renderShows(); } catch (e) { $('#he').textContent = e.message; }
   };
   showReview(s);

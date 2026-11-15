@@ -239,3 +239,19 @@ th { color: var(--muted); }
 @media (max-width: 600px) { .bci { grid-template-columns: 56px minmax(0, 1fr); } .bci > .row { grid-column: 1 / -1; } }
 
 .warnrow td { background: var(--bad-bg); }
+
+/* dashboard */
+.filters-bar .row.wrap, .row.wrap { flex-wrap: wrap; }
+details.ms { position: relative; }
+details.ms > summary { list-style: none; cursor: pointer; padding: 8px 12px; border: 1px solid var(--line, #d5e3d8); border-radius: 10px; background: #fff; font-size: 0.92rem; white-space: nowrap; }
+details.ms > summary::-webkit-details-marker { display: none; }
+details.ms .msl { position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; min-width: 240px; max-height: 320px; overflow: auto; background: #fff; border: 1px solid var(--line, #d5e3d8);
+  border-radius: 12px; padding: 10px; box-shadow: 0 10px 30px #0002; display: flex; flex-direction: column; gap: 6px; }
+details.ms .msl.wide { min-width: min(560px, 92vw); max-height: none; }
+details.ms .msl label { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; }
+details.ms .msl details.ms .msl { position: static; box-shadow: none; }
+.chip { border: 1px solid var(--line, #d5e3d8); border-radius: 99px; padding: 3px 10px; font-size: 0.85rem; }
+.grid.stats.dash { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.tile .dlt { display: block; font-size: 0.8rem; margin-top: 2px; color: var(--muted, #667); }
+.tile .dlt.up { color: var(--ok, #1a7f4b); } .tile .dlt.down { color: var(--bad, #c0392b); }
+@media (max-width: 760px) { details.ms .msl { position: fixed; left: 16px; right: 16px; top: auto; min-width: 0; } }

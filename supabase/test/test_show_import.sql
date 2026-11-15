@@ -52,7 +52,7 @@ select pg_temp.ok(pg_temp.ord('A4')->>'problem' = 'duplicate', 'second order on 
 select pg_temp.ok(pg_temp.ord('A5')->>'state' = 'matched' and pg_temp.ord('A5')->>'problem' is null, 'matched by number, time not checked');
 select pg_temp.ok(pg_temp.ord('A6')->>'problem' = 'duplicate', 'second order on P1 #1 (any time) = duplicate');
 select pg_temp.ok(pg_temp.ord('A7')->>'problem' = 'no_pull', 'no pull #9');
-select pg_temp.ok(jsonb_array_length(j->'blockers') = 1, 'blocker: needs match') from rv;
+select pg_temp.ok(jsonb_array_length(j->'blockers') = 2, 'blockers: needs match + show times') from rv;
 select pg_temp.fails(format('select tfd_show_finalize(%s)', :s), 'finalize blocked', '%need a match%');
 -- edits after the import: fee change allowed
 select pg_temp.fails(format('select tfd_pull_void(%s, ''x'')', (select (x->>'pull_id') from rv, jsonb_array_elements(j->'orders') x where x->>'order_id' = 'A1')), 'pull fixes locked once matched', '%live or ended%');
@@ -75,13 +75,14 @@ set role authenticated;
 select tfd_order_resolve((pg_temp.ord('A3')->>'id')::bigint, 'pull', :p21);
 
 truncate rv; insert into rv select tfd_show_review(:s);
-select pg_temp.ok(jsonb_array_length(j->'blockers') = 0, 'no blockers: ' || (j->'blockers')::text) from rv;
+select pg_temp.ok(jsonb_array_length(j->'blockers') = 1, 'only show times left: ' || (j->'blockers')::text) from rv;
 select pg_temp.ok((j->'totals'->>'units')::int = 5, '5 matched units') from rv;
 select pg_temp.ok((j->'totals'->>'sales_cents')::int = 5200 + 1900 + 2800 + 3000 + 2000, 'sales total') from rv;
 select pg_temp.ok((select (x->>'hours')::numeric from jsonb_array_elements(j->'pay') x where x->>'name' = 'Ally') = 0, 'no hours yet') from rv;
 
 -- finalize
-select tfd_show_shifts_save(:s, format('[{"profile_id":%s,"start_at":"%s","end_at":"%s"}]', :ally, now() - interval '2 hours', now())::jsonb);
+select pg_temp.fails(format($f$select tfd_show_hours_save(%s, now() - interval '3 hours', now() - interval '1 hour', '[{"profile_id":%s,"start_at":"%s","end_at":"%s"}]')$f$, :s, :ally, now() - interval '2 hours', now()), 'streamer hours past the show end flagged', '%Outside the show%');
+select tfd_show_hours_save(:s, now() - interval '3 hours', now() + interval '1 minute', format('[{"profile_id":%s,"start_at":"%s","end_at":"%s"}]', :ally, now() - interval '2 hours', now())::jsonb);
 select tfd_show_finalize(:s) as fin \gset
 select pg_temp.ok((:'fin'::jsonb->>'units')::int = 5, 'finalized 5 units');
 reset role;
@@ -139,6 +140,7 @@ select pg_temp.ok(pg_temp.ord('W3')->>'problem' = 'no_item', 'gift card row igno
 select pg_temp.ok(pg_temp.ord('W4')->>'state' = 'failed', 'failed order listed, not a sale');
 select pg_temp.ok((pg_temp.ord('W1')->>'fee_cents')::int = 4000 * 8 / 100 + 30, 'whatnot fee 8% + $0.30');
 select tfd_order_resolve((pg_temp.ord('W2')->>'id')::bigint, 'sku', null, '100001');
+select tfd_show_hours_save(:w, now() - interval '1 hour', now() + interval '1 minute', '[]');
 select tfd_show_finalize(:w);
 reset role; select pg_temp.ok((select count(*) from pulls where show_id = :w and status = 'sold') = 2, 'listed: 2 sold'); set role authenticated;
 select tfd_show_unfinalize(:w, 'test cleanup');

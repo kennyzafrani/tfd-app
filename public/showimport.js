@@ -119,7 +119,7 @@ async function showReview(s) {
       <div class="panel"><div class="muted small">Not this show</div><b class="big">${T.ignored}</b></div>
       <div class="panel"><div class="muted small">Failed / cancelled</div><b class="big">${T.failed}</b></div>
       <div class="panel"><div class="muted small">Pulls with no order</div><b class="big">${r.released.length}</b></div></div>
-    <div class="seg" id="otab" style="margin:8px 0">${[['attn', `Needs attention (${attn.length})`], ['matched', `Matched (${T.units})`], ['floor', `Below floor (${T.below_floor})`], ['ignored', `Not this show (${T.ignored})`], ['failed', `Failed (${T.failed})`], ['released', `No order (${r.released.length})`]]
+    <div class="seg" id="otab" style="margin:8px 0">${[['attn', `Needs attention (${attn.length})`], ['matched', `Matched (${T.units})`], ['floor', `Below floor (${T.below_floor})`], ['near', `Near floor (${T.near_floor})`], ['ignored', `Not this show (${T.ignored})`], ['failed', `Failed (${T.failed})`], ['released', `No order (${r.released.length})`]]
       .map(([k, l]) => `<button data-v="${k}">${l}</button>`).join('')}</div>
     <div id="olist" style="overflow-x:auto"></div></div>
   <div class="panel"><h2>Money ${done ? '<span class="tag ok">final</span>' : '<span class="muted small">(cost is an estimate until finalize)</span>'}</h2>
@@ -128,12 +128,16 @@ async function showReview(s) {
       <div class="panel"><div class="muted small">Platform fees</div><b class="big">${money(T.fees_cents)}</b><div class="muted small">${feeTxt(r.fees)}</div></div>
       <div class="panel"><div class="muted small">Commission</div><b class="big">${money(T.commission_cents)}</b><div class="muted small">${r.commission_bp / 100}% of sales after fees</div></div>
       <div class="panel"><div class="muted small">Cost of goods (FIFO)</div><b class="big">${money(T.cost_cents)}</b>${T.giveaway_cost_cents ? `<div class="muted small">+ ${money(T.giveaway_cost_cents)} giveaways</div>` : ''}</div>
-      <div class="panel"><div class="muted small">Item profit</div><b class="big">${money(T.profit_cents)}</b><div class="muted small">before hourly pay</div></div></div>
+      <div class="panel"><div class="muted small">Item profit</div><b class="big">${money(T.profit_cents)}</b><div class="muted small">before hourly pay</div></div>
+      <div class="panel"><div class="muted small">Ad spend</div>${done ? `<b class="big">${money(r.ad_spend_cents)}</b>` : `<div class="row"><div class="affix"><span>$</span><input id="ads" type="number" min="0" step="0.01" value="${(r.ad_spend_cents / 100).toFixed(2)}" style="width:90px"></div><button class="btn sm" id="adsv">Save</button></div>`}
+        <div class="muted small">giveaways add ${money(T.giveaway_cost_cents)}</div></div></div>
     <h3>Pay</h3><div style="overflow-x:auto"><table><tr><th>Person</th><th>Role</th><th>Hours</th><th>Hourly</th><th>Hourly pay</th><th>Commission</th><th>Total</th></tr>
       ${r.pay.map(p => `<tr><td>${esc(p.name)}</td><td>${p.role}</td><td>${Number(p.hours).toFixed(2)}</td><td>${money(p.hourly_cents)}</td><td>${money(p.hourly_pay_cents)}</td>
         <td>${p.role === 'streamer' ? money(p.commission_cents) + ` <span class="muted small">(${p.commission_bp / 100}%)</span>` : '—'}</td><td><b>${money(p.hourly_pay_cents + p.commission_cents)}</b></td></tr>`).join('')}</table></div>
     ${r.hours_entered ? '' : '<p class="note warn small">No hours entered yet (Step 2), so hourly pay is $0.</p>'}</div>`;
   $('#otab').querySelectorAll('button').forEach(b => b.onclick = () => { tab = b.dataset.v; drawList(); });
+  if ($('#adsv')) $('#adsv').onclick = async () => { const v = Number($('#ads').value); if (!(v >= 0)) return toast('Enter 0 or more', true);
+    try { await rpc('tfd_show_ad_spend', { p_show: s.id, p_cents: Math.round(v * 100) }); toast('Ad spend saved'); renderShows(); } catch (e) { toast(e.message, true); } };
   if ($('#cof')) $('#cof').onclick = () => openShowFile(r.import.file_path);
   if ($('#crm')) $('#crm').onclick = () => {
     const m = modal(`<h2>Remove the CSV?</h2><p>Undoes the import and every match fix. The show goes back to Concluded and pulls released for having no order are held again.</p>
@@ -152,9 +156,9 @@ async function showReview(s) {
           <input class="inp mono" data-sk="${o.id}" placeholder="or SKU" style="width:90px" inputmode="numeric"><button class="btn sm" data-sko="${o.id}">Use SKU</button></div></td>
         <td><button class="btn sm" data-ig="${o.id}">Not this show</button></td></tr>`;
     }
-    if (mode === 'matched' || mode === 'floor') return `<tr class="${o.below_floor ? 'warnrow' : ''}">${head}<td>${pullTxt(o)} <span class="mono small">${o.sku}</span><div class="small">${esc(o.product || '')}${o.kind === 'giveaway' ? ' <span class="tag claude">Giveaway</span>' : ''}${o.how === 'manual' ? ' <span class="tag">by hand</span>' : ''}</div></td>
+    if (mode === 'matched' || mode === 'floor' || mode === 'near') return `<tr class="${o.below_floor ? 'warnrow' : ''}">${head}<td>${pullTxt(o)} <span class="mono small">${o.sku}</span><div class="small">${esc(o.product || '')}${o.kind === 'giveaway' ? ' <span class="tag claude">Giveaway</span>' : ''}${o.how === 'manual' ? ' <span class="tag">by hand</span>' : ''}</div></td>
       <td class="small">${o.ship_cents != null ? money(o.ship_cents) : '—'}</td><td class="small">${money(o.fee_cents)}</td><td class="small">${money(o.commission_cents)}</td><td class="small">${money(o.cost_cents)}</td>
-      <td><b style="${o.below_floor ? 'color:var(--bad)' : ''}">${money(o.profit_cents)}</b>${o.below_floor ? ' <span class="tag off">below floor</span>' : ''}</td>
+      <td><b style="${o.below_floor ? 'color:var(--bad)' : ''}">${money(o.profit_cents)}</b>${o.below_floor ? ` <span class="tag off">below floor ${money(o.floor_cents)}</span>` : o.near_floor ? ` <span class="tag">near floor ${money(o.floor_cents)}</span>` : ''}</td>
       <td>${done ? '' : `<button class="btn sm" data-un="${o.id}">Unmatch</button>`}</td></tr>`;
     return `<tr>${head}<td class="small">${o.state === 'failed' ? esc(o.status) : (PROBLEM[o.problem] || '') + (o.note ? ': ' + esc(o.note) : '')}</td><td class="small">${o.placed_at ? when(o.placed_at) : ''}</td>
       <td>${o.state === 'ignored' && !done ? `<button class="btn sm" data-in="${o.id}">Include</button>` : ''}</td></tr>`;
@@ -164,9 +168,9 @@ async function showReview(s) {
     const L = $('#olist');
     if (tab === 'released') { L.innerHTML = r.released.length ? `<p class="muted small">Scanned, but no paid order in the file: the sale didn't go through, so these units are available again.</p><table><tr><th>Pull</th><th>SKU</th><th>Product</th></tr>
       ${r.released.map(p => `<tr><td>${p.kind === 'win' ? 'Win #' : `P${p.part} #`}${p.pull_no}</td><td class="mono">${p.sku}</td><td>${esc(p.product || '')}</td></tr>`).join('')}</table>` : '<p class="muted">Every pull has an order.</p>'; return; }
-    const list = tab === 'attn' ? attn : tab === 'matched' ? os.filter(o => o.state === 'matched') : tab === 'floor' ? os.filter(o => o.below_floor) : os.filter(o => o.state === tab);
+    const list = tab === 'attn' ? attn : tab === 'matched' ? os.filter(o => o.state === 'matched') : tab === 'floor' ? os.filter(o => o.below_floor) : tab === 'near' ? os.filter(o => o.near_floor) : os.filter(o => o.state === tab);
     const hd = tab === 'attn' ? '<th>Order</th><th>Listing</th><th>Buyer</th><th>Price</th><th>Problem</th><th>Fix</th><th></th>'
-      : tab === 'matched' || tab === 'floor' ? '<th>Order</th><th>Listing</th><th>Buyer</th><th>Price</th><th>Pull</th><th>Ship</th><th>Fee</th><th>Comm.</th><th>Cost</th><th>Profit</th><th></th>'
+      : tab === 'matched' || tab === 'floor' || tab === 'near' ? '<th>Order</th><th>Listing</th><th>Buyer</th><th>Price</th><th>Pull</th><th>Ship</th><th>Fee</th><th>Comm.</th><th>Cost</th><th>Profit</th><th></th>'
       : '<th>Order</th><th>Listing</th><th>Buyer</th><th>Price</th><th>Why</th><th>Placed</th><th></th>';
     L.innerHTML = list.length ? `<table><tr>${hd}</tr>${list.map(o => orderRow(o, tab)).join('')}</table>` : `<p class="muted">${tab === 'attn' ? 'Nothing needs attention.' : 'None.'}</p>`;
     L.querySelectorAll('[data-ack]').forEach(b => b.onclick = () => fix(Number(b.dataset.ack), 'ack'));
@@ -189,7 +193,7 @@ async function showReview(s) {
       <button class="btn danger" id="unf">Unfinalize</button></div>`
     : `<div class="panel"><h2>Step 3 · Finalize</h2>
       ${bl.length ? `<div class="note bad"><b>Fix these first:</b><ul style="margin:6px 0 0">${bl.map(b => `<li>${esc(b)}</li>`).join('')}</ul></div>` : '<p class="muted">Everything is matched.</p>'}
-      ${T.below_floor ? `<p class="note warn small">${T.below_floor} sale(s) below floor (see the Below floor tab). Info only.</p>` : ''}
+      ${T.below_floor || T.near_floor ? `<p class="note warn small">${T.below_floor} sale(s) below floor, ${T.near_floor} within ${r.near_floor_bp / 100}% above it (see the tabs). Info only.</p>` : ''}
       <button class="btn primary" id="fz" ${bl.length ? 'disabled' : ''}>Finalize show</button></div>`;
   if ($('#fz')) $('#fz').onclick = () => {
     const payTot = r.pay.reduce((a, p) => a + p.hourly_pay_cents + p.commission_cents, 0);
@@ -197,7 +201,8 @@ async function showReview(s) {
         <li><b>${T.units}</b> unit(s) come out of inventory (est. cost ${money((T.cost_cents || 0) + (T.giveaway_cost_cents || 0))}, oldest stock first).</li>
         <li>Fee locks at <b>${feeTxt(r.fees)}</b>. Later Settings changes never touch this show.</li>
         <li>Pay locks at <b>${money(payTot)}</b> (${r.pay.map(p => `${esc(p.name)} ${money(p.hourly_pay_cents + p.commission_cents)}`).join(', ')}).</li>
-        <li>Sales ${money(T.sales_cents)}, item profit ${money(T.profit_cents)}.</li></ul>
+        <li>Sales ${money(T.sales_cents)}, item profit ${money(T.profit_cents)}, ad spend ${money(r.ad_spend_cents)}.</li>
+        <li>Show time ${r.show_hours} h. Each sale keeps the floor it showed when scanned.</li></ul>
       ${r.hours_entered ? '' : '<div class="note warn">No hours entered: hourly pay will be $0.</div>'}
       <p class="muted small">You can unfinalize later if something's wrong.</p><div class="err" id="fe"></div>
       <div class="actions"><button class="btn" data-close>Cancel</button><button class="btn primary" id="fy">Yes, finalize</button></div>`);

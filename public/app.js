@@ -2,7 +2,7 @@
 // TFD app front end (Phase 1: shell, sign-in, Settings, Activity Log).
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const money = c => c === null || c === undefined ? '—' : '$' + (c / 100).toFixed(2);
+const money = c => c === null || c === undefined || Number.isNaN(Number(c)) ? '—' : (Number(c) < 0 ? '−$' : '$') + Math.abs(Number(c) / 100).toFixed(2);
 const pct = b => b === null || b === undefined ? '—' : (b / 100) + '%';
 const when = iso => new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 
@@ -99,7 +99,7 @@ function renderSignIn() {
   $('#lf').onsubmit = async e => {
     e.preventDefault();
     try { await authCall('password', { email: toLogin($('#lu').value), password: $('#lp').value }); await boot(); }
-    catch (err) { $('#le').textContent = err.message; $('#lp').value = ''; }
+    catch (err) { if ($('#le')) { $('#le').textContent = err.message; $('#lp').value = ''; } else toast(err.message, true); }
   };
 }
 
@@ -146,6 +146,7 @@ function route() {
   if (id === 'activity') return renderActivity();
   if (id === 'inventory') return renderInventory();
   if (id === 'shows') return renderShows();
+  if (id === 'dashboard') return renderDashboard();
   $('#main').innerHTML = `<div class="panel placeholder"><h1>${tab.label}</h1>
     <p class="muted">This tab is fully spec'd and gets built in Phase ${tab.phase}.</p></div>`;
 }
