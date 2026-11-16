@@ -120,7 +120,8 @@ begin
     or (cardinality(arr_lt) > 0 and not coalesce(receipt_id, 0) = any(arr_lt)) or (pmin is not null and sale < pmin) or (pmax is not null and sale > pmax);
   alter table dash_o add column comm numeric, add column cost numeric, add column w numeric not null default 1;
   update dash_o set comm = case when status = 'finalized' then locked_comm when fee is null then null else round(cbp * (sale - fee) / 10000.0) end,
-                    cost = case when status = 'finalized' then locked_cost else est_cost end;
+                    cost = case when status = 'finalized' then locked_cost else est_cost end
+    where true;   -- Supabase refuses an UPDATE with no WHERE
   -- who sold it: the streamer(s) working when it was scanned (split if two); no hours entered → the show's streamers
   create temp table dash_w on commit drop as
     select o.id, x.profile_id, 1.0 / count(*) over (partition by o.id) w from dash_o o
@@ -129,7 +130,7 @@ begin
       union select sp.profile_id from show_people sp where sp.show_id = o.show_id and sp.role = 'streamer'
         and not exists (select 1 from show_shifts h where h.show_id = o.show_id and h.role = 'streamer' and o.at >= h.start_at and o.at < h.end_at)) x;
   if cardinality(arr_pp) > 0 then
-    update dash_o o set w = coalesce((select sum(w.w) from dash_w w where w.id = o.id and w.profile_id = any(arr_pp)), 0);
+    update dash_o o set w = coalesce((select sum(w.w) from dash_w w where w.id = o.id and w.profile_id = any(arr_pp)), 0) where true;
     delete from dash_o where w = 0;
   end if;
 
