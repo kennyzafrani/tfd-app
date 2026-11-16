@@ -56,16 +56,20 @@ async function supabase(req, res, url) {
     if (req.method === 'PUT') { const b = await body(req); for (const u of passwords.values()) if (u.id === id) u.password = b.password; return json(res, 200, {}); }
     if (req.method === 'DELETE') { for (const [k, u] of passwords) if (u.id === id) passwords.delete(k); sql(`delete from auth.users where id = ${lit(id)}`); return json(res, 200, {}); }
   }
+  if (/^\/storage\/v1\/object\/(pack-photos)$/.test(p) && req.method === 'DELETE') {
+    const chunks = []; for await (const c of req) chunks.push(c); const b = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+    (b.prefixes || []).forEach(k => FILES.delete(k)); return json(res, 200, (b.prefixes || []).map(name => ({ name })));
+  }
   if (p.startsWith('/storage/v1/object/sign/')) {
     const b = await body(req); const t = bearer(req);
-    const ok = sql('select tfd_is_admin()', 'authenticated', t); if (!ok.ok || ok.out !== 't') return json(res, 403, { message: 'not allowed' });
+    const ok = sql(p.endsWith('/pack-photos') ? 'select tfd_can_pack()' : 'select tfd_is_admin()', 'authenticated', t); if (!ok.ok || ok.out !== 't') return json(res, 403, { message: 'not allowed' });
     return json(res, 200, b.paths.map(x => ({ path: x, signedURL: '/object/fake/' + x + '?token=x' })));
   }
   if (p.startsWith('/storage/v1/object/fake/')) { const k = p.slice('/storage/v1/object/fake/'.length); const f = FILES.get(k); if (!f) return json(res, 404, {}); res.writeHead(200, { 'Content-Type': 'image/jpeg' }); return res.end(f); }
-  if (/^\/storage\/v1\/object\/(lot-photos|show-files)\//.test(p) && req.method === 'POST') {
-    const t = bearer(req); const ok = sql('select tfd_is_admin()', 'authenticated', t);
+  if (/^\/storage\/v1\/object\/(lot-photos|show-files|pack-photos)\//.test(p) && req.method === 'POST') {
+    const t = bearer(req); const ok = sql(p.includes('/pack-photos/') ? 'select tfd_can_pack()' : 'select tfd_is_admin()', 'authenticated', t);
     if (!ok.ok || ok.out !== 't') return json(res, 403, { message: 'new row violates row-level security policy' });
-    const chunks = []; for await (const c of req) chunks.push(c); FILES.set(p.replace(/^\/storage\/v1\/object\/(lot-photos|show-files)\//, ''), Buffer.concat(chunks));
+    const chunks = []; for await (const c of req) chunks.push(c); FILES.set(p.replace(/^\/storage\/v1\/object\/(lot-photos|show-files|pack-photos)\//, ''), Buffer.concat(chunks));
     return json(res, 200, { Key: p });
   }
   if (p.startsWith('/rest/v1/rpc/')) {

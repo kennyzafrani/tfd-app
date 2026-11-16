@@ -40,7 +40,8 @@ async function renderDashboard() {
   DASH.f = DASH.f || loadF();
   main.innerHTML = '<div class="panel muted">Loading…</div>';
   let d;
-  try { d = await rpc('tfd_dashboard', { p: toQuery(DASH.f) }); } catch (e) { main.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
+  try { d = await rpc('tfd_dashboard', { p: toQuery(DASH.f) }); } catch (e) { if (stillOn('dashboard')) main.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
+  if (!stillOn('dashboard')) return;
   const f = DASH.f, T = d.totals, P = d.previous, C = d.choices;
   const oneStreamer = f.people.length === 1;
   const sv = oneStreamer && DASH.streamerView;

@@ -2,6 +2,7 @@
 // TFD app front end (Phase 1: shell, sign-in, Settings, Activity Log).
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const stillOn = tab => { const h = location.hash.slice(1).split('/')[0]; return !h || h === tab; };   // a page that finished loading after you clicked away doesn't draw
 const money = c => c === null || c === undefined || Number.isNaN(Number(c)) ? '—' : (Number(c) < 0 ? '−$' : '$') + Math.abs(Number(c) / 100).toFixed(2);
 const pct = b => b === null || b === undefined ? '—' : (b / 100) + '%';
 const when = iso => new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -83,7 +84,7 @@ function renderSetup() {
     try {
       await server('POST', '/api/users', { name: $('#sn').value, login: $('#se_').value, password: $('#sp').value, role: 'admin' });
       await authCall('password', { email: toLogin($('#se_').value), password: $('#sp').value }); await boot();
-    } catch (e) { $('#se').textContent = e.message; }
+    } catch (e) { if ($('#se')) $('#se').textContent = e.message; else toast(e.message, true); }
   };
 }
 function renderSignIn() {
@@ -147,6 +148,7 @@ function route() {
   if (id === 'inventory') return renderInventory();
   if (id === 'shows') return renderShows();
   if (id === 'dashboard') return renderDashboard();
+  if (id === 'fulfillment') return renderFulfillment();
   $('#main').innerHTML = `<div class="panel placeholder"><h1>${tab.label}</h1>
     <p class="muted">This tab is fully spec'd and gets built in Phase ${tab.phase}.</p></div>`;
 }

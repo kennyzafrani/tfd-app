@@ -255,3 +255,18 @@ details.ms .msl details.ms .msl { position: static; box-shadow: none; }
 .tile .dlt { display: block; font-size: 0.8rem; margin-top: 2px; color: var(--muted, #667); }
 .tile .dlt.up { color: var(--ok, #1a7f4b); } .tile .dlt.down { color: var(--bad, #c0392b); }
 @media (max-width: 760px) { details.ms .msl { position: fixed; left: 16px; right: 16px; top: auto; min-width: 0; } }
+
+/* fulfillment */
+.packgrid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 900px) { .packgrid { grid-template-columns: minmax(0, 1fr); } }
+.pitems { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.pitem { display: grid; grid-template-columns: 84px minmax(0, 1fr) auto; gap: 12px; align-items: center; border: 1px solid var(--line); border-radius: 12px; padding: 8px; background: #fff; }
+.pitem img, .pitem .noimg { width: 84px; height: 64px; object-fit: contain; border-radius: 8px; background: #f2f4f2; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; color: var(--muted); }
+.pitem.done { border-color: var(--ok, #1a7f4b); background: #eef8f1; }
+.pcount { text-align: center; min-width: 56px; } .okc { color: var(--ok, #1a7f4b); font-size: 1.4rem; font-weight: 700; }
+.thumb { display: flex; flex-direction: column; gap: 4px; align-items: center; } .thumb img { width: 140px; height: 105px; object-fit: cover; border-radius: 8px; background: #ddd; }
+.huge-btn { font-size: 1.3rem; padding: 16px 40px; margin: 10px 0; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+.pcardx { border: 2px dashed #999; border-radius: 12px; padding: 16px; text-align: center; background: #fff; }
+.pcardx svg { max-width: 100%; height: auto; fill: #000; } .pcl { font-weight: 800; font-size: 1.4rem; margin-bottom: 8px; letter-spacing: 0.04em; }
+@media print { aside.top, .mtop, .mbot, .mdrawer, .noprint, #toast { display: none !important; } .shell { display: block !important; } .main, #main { margin: 0 !important; padding: 0 !important; } .printable { box-shadow: none; border: 0; } body { background: #fff; } }
