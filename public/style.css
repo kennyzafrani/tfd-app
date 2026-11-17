@@ -270,3 +270,6 @@ details.ms .msl details.ms .msl { position: static; box-shadow: none; }
 .pcardx { border: 2px dashed #999; border-radius: 12px; padding: 16px; text-align: center; background: #fff; }
 .pcardx svg { max-width: 100%; height: auto; fill: #000; } .pcl { font-weight: 800; font-size: 1.4rem; margin-bottom: 8px; letter-spacing: 0.04em; }
 @media print { aside.top, .mtop, .mbot, .mdrawer, .noprint, #toast { display: none !important; } .shell { display: block !important; } .main, #main { margin: 0 !important; padding: 0 !important; } .printable { box-shadow: none; border: 0; } body { background: #fff; } }
+/* payroll */
+tr.tot td { border-top: 2px solid #00000022; }
+table.kv td { padding: 6px 4px; }

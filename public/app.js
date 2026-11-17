@@ -149,6 +149,7 @@ function route() {
   if (id === 'shows') return renderShows();
   if (id === 'dashboard') return renderDashboard();
   if (id === 'fulfillment') return renderFulfillment();
+  if (id === 'payroll') return renderPayroll();
   $('#main').innerHTML = `<div class="panel placeholder"><h1>${tab.label}</h1>
     <p class="muted">This tab is fully spec'd and gets built in Phase ${tab.phase}.</p></div>`;
 }
