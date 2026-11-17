@@ -68,7 +68,11 @@ const csvOf = (head, rows) => '﻿' + [head, ...rows.map(r => head.map(h => r[h]
   await page.waitForSelector('.tabs');
   const tabs = await page.textContent('.tabs');
   ok(tabs.includes('Fulfillment') && !tabs.includes('Inventory') && !tabs.includes('Shows'), 'packer sees Fulfillment only: ' + tabs.trim().replace(/\s+/g, ' '));
-  await page.goto(BASE + '/#fulfillment'); await page.waitForSelector('#cin'); await page.click('#cin'); await page.waitForSelector('.packst #scan');
+  await page.goto(BASE + '/#fulfillment'); await page.waitForSelector('.packst #scan');
+  ok((await page.textContent('#clk')).includes('Not clocked in') && (await page.textContent('#cout')) === 'Clock in', 'packing screen opens without clocking in');
+  ok((await page.locator('#pq tr').count()) === 3, 'packer sees the whole queue (2 packages)');
+  await page.click('#cout'); await page.waitForFunction(() => document.querySelector('#cout').textContent === 'Clock out');
+  ok((await page.textContent('#clk')).includes('Clocked in'), 'clock in is its own button');
   const sc = async v => { await page.fill('#scan', v); await page.press('#scan', 'Enter'); await page.waitForTimeout(500); };
   await sc('9999999999');
   ok((await page.textContent('#msg')).includes('No unpacked package'), 'unknown label');
@@ -98,7 +102,11 @@ const csvOf = (head, rows) => '﻿' + [head, ...rows.map(r => head.map(h => r[h]
   ok((await page.textContent('#msg')).includes('Problem'), 'problem sent to Kenny');
   await page.setViewportSize({ width: 820, height: 1180 }); await sc('9400222222222222222222'); await shot(page, 'f4-ipad'); await page.setViewportSize({ width: 1280, height: 900 });
   await page.click('#leave');
-  await page.click('#cout'); await page.waitForSelector('#cin');
+  await page.click('#cout'); await page.waitForFunction(() => document.querySelector('#cout').textContent === 'Clock in');
+  // open from the queue (no label scan)
+  await page.locator('#pq [data-oq]').first().click(); await page.waitForTimeout(300);
+  ok((await page.textContent('#pkg')).includes('Bo Kim') && (await page.textContent('#pq')).includes('Open'), 'open a package from the queue');
+  await page.click('#leave');
 
   // admin again
   await page.evaluate(async () => { await signOut(); });
@@ -116,6 +124,13 @@ const csvOf = (head, rows) => '﻿' + [head, ...rows.map(r => head.map(h => r[h]
   ok(st.sold_not_packed === 1 && st.in_bin === st.on_hand + 1, 'stock: 1 sold-not-packed, still in the bin');
   await page.goto(showUrl); await page.waitForSelector('#unf'); await page.click('#unf'); await page.fill('#ur', 'test'); await page.click('#uy'); await page.waitForTimeout(600);
   ok((await page.textContent('#ue')).includes('Packing has started'), 'unfinalize blocked once packing started');
+  // admin bulk pack: select all → mark packed
+  await page.evaluate(() => document.querySelectorAll('.modal-bg').forEach(m => m.remove()));
+  await page.goto(BASE + '/#fulfillment'); await page.waitForSelector('#selall');
+  ok(await page.isDisabled('#bulk'), 'bulk button off until something is picked');
+  await page.check('#selall'); ok((await page.textContent('#bulk')) === 'Mark 1 packed', 'select all picks the queue');
+  await page.click('#bulk'); await page.click('#by'); await page.waitForSelector('text=Zero pending');
+  ok(/Packages left\s*0/.test(await page.textContent('.stats')), 'bulk packed: queue empty');
   ok(!errs.length, 'no page errors ' + JSON.stringify(errs));
   await browser.close(); console.log('PACK E2E PASSED');
 })().catch(e => { console.error(e.message); process.exit(1); });

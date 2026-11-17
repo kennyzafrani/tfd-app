@@ -40,7 +40,8 @@ async function renderDashboard() {
   DASH.f = DASH.f || loadF();
   main.innerHTML = '<div class="panel muted">Loading…</div>';
   let d;
-  try { d = await rpc('tfd_dashboard', { p: toQuery(DASH.f) }); } catch (e) { if (stillOn('dashboard')) main.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
+  let iv = null;
+  try { [d, iv] = await Promise.all([rpc('tfd_dashboard', { p: toQuery(DASH.f) }), rpc('tfd_inventory_value').catch(() => null)]); } catch (e) { if (stillOn('dashboard')) main.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
   if (!stillOn('dashboard')) return;
   const f = DASH.f, T = d.totals, P = d.previous, C = d.choices;
   const oneStreamer = f.people.length === 1;
@@ -74,7 +75,7 @@ async function renderDashboard() {
       tile('Streamer pay total', prod ? '—' : money(totalPay), null, null, true),
       tile('Ad / marketing', prod ? '—' : money((T.ad_spend_cents || 0) + Number(T.giveaway_cost_cents || 0)), null, `ads ${prod ? '—' : money(T.ad_spend_cents)} + giveaways ${money(T.giveaway_cost_cents)}`, true),
       tile('Refunds', '0 · $0.00', null, 'arrive with Fulfillment'),
-      tile('Sold near floor', dpct(Number(T.near_floor) + Number(T.below_floor), T.with_floor), null, `${num(T.below_floor)} below, ${num(T.near_floor)} within ${(T.near_floor_bp || 500) / 100}% above`)];
+      tile('Inventory value', iv ? money(iv.cost_cents) : '—', null, iv ? `at cost, on hand now · ${num(iv.units, 0)} units, ${num(iv.skus, 0)} SKUs · retail ${money(iv.retail_cents)}` : '')];
   const perHour = prod || !H ? '' : `<div class="panel"><h3 style="margin-top:0">Per hour <span class="muted small">(${num(H, 2)} h)</span></h3><div class="grid stats">
       ${(sv ? [['Revenue', T.revenue_cents], ['Hourly pay', T.hourly_pay_cents], ['Commission', T.commission_cents], ['Total pay', totalPay]]
            : [['Revenue', T.revenue_cents], ['Item profit', T.item_profit_cents], ['Net profit', T.net_profit_cents], ['Hourly pay', T.hourly_pay_cents], ['Commission', T.commission_cents], ['Ad spend', T.ad_spend_cents]])

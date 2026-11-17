@@ -116,10 +116,10 @@ async function showReview(s) {
     <div class="grid stats">
       <div class="panel"><div class="muted small">Matched</div><b class="big">${T.units}</b></div>
       <div class="panel"><div class="muted small">Need a match</div><b class="big" style="${T.needs_match ? 'color:var(--bad)' : ''}">${T.needs_match}</b></div>
-      <div class="panel"><div class="muted small">Not this show</div><b class="big">${T.ignored}</b></div>
+      <div class="panel"><div class="muted small">Left out</div><b class="big">${T.ignored}</b></div>
       <div class="panel"><div class="muted small">Failed / cancelled</div><b class="big">${T.failed}</b></div>
       <div class="panel"><div class="muted small">Pulls with no order</div><b class="big">${r.released.length}</b></div></div>
-    <div class="seg" id="otab" style="margin:8px 0">${[['attn', `Needs attention (${attn.length})`], ['matched', `Matched (${T.units})`], ['floor', `Below floor (${T.below_floor})`], ['near', `Near floor (${T.near_floor})`], ['ignored', `Not this show (${T.ignored})`], ['failed', `Failed (${T.failed})`], ['released', `No order (${r.released.length})`]]
+    <div class="seg" id="otab" style="margin:8px 0">${[['attn', `Needs attention (${attn.length})`], ['matched', `Matched (${T.units})`], ['floor', `Below floor (${T.below_floor})`], ['near', `Near floor (${T.near_floor})`], ['ignored', `Left out (${T.ignored})`], ['failed', `Failed (${T.failed})`], ['released', `No order (${r.released.length})`]]
       .map(([k, l]) => `<button data-v="${k}">${l}</button>`).join('')}</div>
     <div id="olist" style="overflow-x:auto"></div></div>
   <div class="panel"><h2>Money ${done ? '<span class="tag ok">final</span>' : '<span class="muted small">(cost is an estimate until finalize)</span>'}</h2>
@@ -153,8 +153,9 @@ async function showReview(s) {
         <td><div class="row"><button class="btn sm primary" data-ack="${o.id}">It's right</button><button class="btn sm" data-un="${o.id}">Unmatch</button></div></td></tr>`;
       return `<tr>${head}<td><span class="tag off">${PROBLEM[o.problem] || esc(o.problem || '')}</span></td>
         <td><div class="row"><select class="inp" data-ps="${o.id}" style="max-width:260px"><option value="">Match to a pull…</option>${pullOpts}</select>
-          <input class="inp mono" data-sk="${o.id}" placeholder="or SKU" style="width:90px" inputmode="numeric"><button class="btn sm" data-sko="${o.id}">Use SKU</button></div></td>
-        <td><button class="btn sm" data-ig="${o.id}">Not this show</button></td></tr>`;
+          <input class="inp mono" data-sk="${o.id}" placeholder="SKU" style="width:90px" inputmode="numeric"><button class="btn sm" data-sko="${o.id}">${o.problem === 'no_pull' && o.part != null && o.pull_no != null && s.type !== 'listed' ? `Add as P${o.part} #${o.pull_no}` : 'Use SKU'}</button></div>
+          ${o.problem === 'no_pull' ? `<div class="muted small" style="margin-top:4px">Sold but never scanned? Type the SKU that was sold to add it as this pull. Not a real sale? Delete it.</div>` : ''}</td>
+        <td><button class="btn sm danger" data-ig="${o.id}">Delete</button></td></tr>`;
     }
     if (mode === 'matched' || mode === 'floor' || mode === 'near') return `<tr class="${o.below_floor ? 'warnrow' : ''}">${head}<td>${pullTxt(o)} <span class="mono small">${o.sku}</span><div class="small">${esc(o.product || '')}${o.kind === 'giveaway' ? ' <span class="tag claude">Giveaway</span>' : ''}${o.how === 'manual' ? ' <span class="tag">by hand</span>' : ''}</div></td>
       <td class="small">${o.ship_cents != null ? money(o.ship_cents) : '—'}</td><td class="small">${money(o.fee_cents)}</td><td class="small">${money(o.commission_cents)}</td><td class="small">${money(o.cost_cents)}</td>
@@ -179,9 +180,9 @@ async function showReview(s) {
     L.querySelectorAll('[data-ps]').forEach(sel => sel.onchange = () => { if (sel.value) fix(Number(sel.dataset.ps), 'pull', { p_pull: Number(sel.value) }); });
     L.querySelectorAll('[data-sko]').forEach(b => b.onclick = () => { const v = L.querySelector(`[data-sk="${b.dataset.sko}"]`).value.trim(); if (!/^\d{6}$/.test(v)) return toast('Enter a 6-digit SKU', true); fix(Number(b.dataset.sko), 'sku', { p_sku: v }); });
     L.querySelectorAll('[data-ig]').forEach(b => b.onclick = () => {
-      const m = modal(`<h2>Not part of this show?</h2><p>The order is left out of this show's sales. Use this for an order from another show, or one that was refunded.</p>
-        <label class="f">Reason<input id="ir" class="inp"></label><div class="err" id="ie"></div><div class="actions"><button class="btn primary" id="iy">Leave it out</button></div>`);
-      m.querySelector('#iy').onclick = async () => { try { await rpc('tfd_order_resolve', { p_order: Number(b.dataset.ig), p_action: 'ignore', p_reason: m.querySelector('#ir').value }); m.remove(); renderShows(); } catch (e) { m.querySelector('#ie').textContent = e.message; } };
+      const m = modal(`<h2>Delete this order from the show?</h2><p>It's left out of this show's sales, inventory and packing. It moves to the Left out tab, where you can bring it back with Include.</p>
+        <label class="f">Reason<input id="ir" class="inp" value="Not a real sale"></label><div class="err" id="ie"></div><div class="actions"><button class="btn danger" id="iy">Delete</button></div>`);
+      m.querySelector('#ir').select(); m.querySelector('#iy').onclick = async () => { try { await rpc('tfd_order_resolve', { p_order: Number(b.dataset.ig), p_action: 'ignore', p_reason: m.querySelector('#ir').value }); m.remove(); renderShows(); } catch (e) { m.querySelector('#ie').textContent = e.message; } };
     });
   };
   drawList();

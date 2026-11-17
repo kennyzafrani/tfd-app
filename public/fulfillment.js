@@ -53,17 +53,27 @@ async function fulfillmentAdmin(main) {
     ${problems.length ? `<div class="panel"><h3 style="margin-top:0">Problems</h3><table><tr><th>Package</th><th>Buyer</th><th>Problem</th><th></th></tr>
       ${problems.map(p => `<tr><td class="mono small">${esc(p.tracking || '#' + p.id)}<div class="muted">${esc(p.show)}</div></td><td>${esc(p.ship_name || p.buyer || '')}</td>
         <td>${esc(p.problem_note || '')}<div class="muted small">by ${esc(p.problem_by || '')}</div></td><td><button class="btn sm" data-rs="${p.id}">Resolve</button></td></tr>`).join('')}</table></div>` : ''}
-    <div class="panel"><h3 style="margin-top:0">Queue</h3><div style="overflow-x:auto"><table><tr><th>Status</th><th>Tracking</th><th>Show</th><th>Buyer</th><th>Items</th><th>Photo</th><th>Age</th></tr>
-      ${q.packages.map(p => `<tr class="click" data-pk="${esc(p.tracking || p.id)}"><td>${pkTag(p.status)}</td><td class="mono small">${esc(p.tracking || '—')}</td><td class="small">${esc(p.show)}</td>
+    <div class="panel"><div class="head"><h3 style="margin:0">Queue</h3><button class="btn primary" id="bulk" disabled>Mark packed</button></div><div style="overflow-x:auto"><table><tr><th><input type="checkbox" id="selall" title="Select all"></th><th>Status</th><th>Tracking</th><th>Show</th><th>Buyer</th><th>Items</th><th>Photo</th><th>Age</th></tr>
+      ${q.packages.map(p => `<tr class="click" data-pk="${esc(p.tracking || p.id)}"><td data-stop><input type="checkbox" class="bsel" value="${p.id}"></td><td>${pkTag(p.status)}</td><td class="mono small">${esc(p.tracking || '—')}</td><td class="small">${esc(p.show)}</td>
         <td>${esc(p.ship_name || '')}<div class="muted small">${esc(p.buyer || '')}</div></td><td>${p.scanned}/${p.units}</td><td>${p.photos ? '✓' : ''}</td><td>${ageTxt(p.created_at)}</td></tr>`).join('')
-        || '<tr><td colspan="7" class="muted">Nothing to pack. Packages appear here when a show is finalized.</td></tr>'}</table></div></div>`;
+        || '<tr><td colspan="8" class="muted">Nothing to pack. Packages appear here when a show is finalized.</td></tr>'}</table></div></div>`;
   const find = async v => {
     try { const r = await rpc('tfd_pack_lookup', { p_q: v }); $('#lres').innerHTML = r.length ? r.map(lookupCard).join('') : '<p class="muted">No package found.</p>'; bindLookup(r); }
     catch (e) { $('#lres').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
   };
   $('#lgo').onclick = () => find($('#lq').value);
   $('#lq').onkeydown = e => { if (e.key === 'Enter') find($('#lq').value); };
-  main.querySelectorAll('[data-pk]').forEach(tr => tr.onclick = () => { $('#lq').value = tr.dataset.pk; find(tr.dataset.pk); $('#lq').scrollIntoView({ behavior: 'smooth' }); });
+  const sel = () => [...main.querySelectorAll('.bsel:checked')].map(c => Number(c.value));
+  const upd = () => { const n = sel().length; $('#bulk').disabled = !n; $('#bulk').textContent = n ? `Mark ${n} packed` : 'Mark packed'; if ($('#selall')) $('#selall').checked = n && n === main.querySelectorAll('.bsel').length; };
+  main.querySelectorAll('.bsel').forEach(c => c.onchange = upd);
+  if ($('#selall')) $('#selall').onchange = () => { main.querySelectorAll('.bsel').forEach(c => c.checked = $('#selall').checked); upd(); };
+  $('#bulk').onclick = () => {
+    const ids = sel(); if (!ids.length) return;
+    const m = modal(`<h2>Mark ${ids.length} package(s) packed?</h2><p>They leave the queue as packed by you, with no item scans or photo. Each one is logged, and you can unpack any of them later from Find a package.</p>
+      <div class="err" id="be"></div><div class="actions"><button class="btn primary" id="by">Mark ${ids.length} packed</button></div>`);
+    m.querySelector('#by').onclick = async () => { try { const r = await rpc('tfd_pack_bulk', { p_ids: ids }); m.remove(); toast(`${r.packed} package(s) marked packed`); renderFulfillment(); } catch (e) { m.querySelector('#be').textContent = e.message; } };
+  };
+  main.querySelectorAll('[data-pk]').forEach(tr => tr.onclick = e => { if (e.target.closest('[data-stop]')) return; $('#lq').value = tr.dataset.pk; find(tr.dataset.pk); $('#lq').scrollIntoView({ behavior: 'smooth' }); });
   main.querySelectorAll('[data-rs]').forEach(b => b.onclick = () => {
     const m = modal(`<h2>Resolve problem</h2><p>The package goes back to the queue with its scans kept.</p><label class="f">What did you do?<input id="rn" class="inp" placeholder="e.g. swapped the damaged pair"></label>
       <div class="err" id="re"></div><div class="actions"><button class="btn primary" id="ry">Back to queue</button></div>`);
@@ -124,29 +134,35 @@ async function packStation(main) {
   const load = async () => { P.data = await rpc('tfd_pack_data'); if (P.cur) P.cur = P.data.packages.find(p => p.id === P.cur.id) || null; };
   await load();
   if (!stillOn('fulfillment')) return;
-  if (!P.data.clock_in) {
-    main.innerHTML = `<div class="panel" style="max-width:520px;margin:40px auto;text-align:center"><h1>Packing</h1><p>Hi ${esc(P.data.me)}. ${P.data.packages.length} package(s) waiting.</p>
-      <button class="btn primary huge-btn" id="cin">Clock in</button><p class="muted small">Your time counts from now until you clock out.</p>
-      ${S.state.me.role === 'admin' ? '<p><a href="#fulfillment" class="small">← Back to Fulfillment</a></p>' : ''}</div>`;
-    $('#cin').onclick = async () => { try { await rpc('tfd_pack_clock', { p_in: true }); packStation(main); } catch (e) { toast(e.message, true); } };
-    return;
-  }
   main.innerHTML = `<div class="packst">
-    <div class="livebar"><div><div class="lname">Packing · ${esc(P.data.me)}</div><div class="muted small">Clocked in ${new Date(P.data.clock_in).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</div></div>
+    <div class="livebar"><div><div class="lname">Packing · ${esc(P.data.me)}</div><div class="muted small" id="clk"></div></div>
       <div class="lstat"><span class="muted small">Left</span><b class="big" id="left"></b></div><div class="lstat"><span class="pill" id="sync"></span></div>
-      <div class="row"><a class="btn sm" href="#fulfillment/picklist">Pick list</a><button class="btn sm" id="cout">Clock out</button></div></div>
+      <div class="row">${S.state.me.role === 'admin' ? '<a class="btn sm" href="#fulfillment">← Fulfillment</a>' : ''}<a class="btn sm" href="#fulfillment/picklist">Pick list</a><button class="btn sm" id="cout"></button></div></div>
     <div class="panel scanp"><input id="scan" class="inp scaninp" autocomplete="off" placeholder="Scan a shipping label to start"><div id="msg"></div></div>
     <div class="packgrid"><div id="pkg"></div>
       <div class="panel" id="campanel"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Camera</h3><select id="camsel" class="inp" style="max-width:220px"></select></div>
         <video id="vid" autoplay playsinline muted style="width:100%;border-radius:10px;background:#000;margin-top:8px;aspect-ratio:4/3;object-fit:cover"></video>
         <canvas id="cv" style="display:none"></canvas><div class="row" style="margin-top:8px"><button class="btn" id="snap">Take picture</button><span class="muted small">or scan TAKE PICTURE</span></div></div></div>
-    <div class="panel"><div class="row wrap"><input id="sq" class="inp" placeholder="Label won't scan? Search buyer or name" style="flex:1"><button class="btn" id="sgo">Search</button></div><div id="sres"></div></div></div>`;
+    <div class="panel"><div class="row wrap"><input id="sq" class="inp" placeholder="Label won't scan? Search buyer or name" style="flex:1"><button class="btn" id="sgo">Search</button></div><div id="sres"></div></div>
+    <div class="panel" id="pqp"><h3 style="margin-top:0">Queue</h3><div style="overflow-x:auto" id="pq"></div></div></div>`;
   const msg = (h, cls) => { $('#msg').innerHTML = h ? `<div class="note ${cls || ''}" style="margin-top:10px">${h}</div>` : ''; };
   const focus = () => { const s = $('#scan'); if (s && !document.querySelector('.modal')) s.focus(); };
   const draw = () => {
     const q = loadPQ();
     $('#left').textContent = P.data.packages.filter(p => p.status !== 'packed').length;
     const sy = $('#sync'); sy.textContent = P.sync === 'off' ? `Offline · ${q.length} waiting` : q.length ? `Saving ${q.length}…` : 'All saved'; sy.className = 'pill ' + (P.sync === 'off' ? 'bad' : q.length ? 'warn' : 'ok');
+    const ci = P.data.clock_in;
+    $('#clk').textContent = ci ? `Clocked in ${new Date(ci).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Not clocked in';
+    $('#cout').textContent = ci ? 'Clock out' : 'Clock in'; $('#cout').className = 'btn sm' + (ci ? '' : ' primary');
+    const open = P.data.packages.filter(x => x.status !== 'packed');
+    $('#pq').innerHTML = `<table><tr><th>Status</th><th>Buyer</th><th>Show</th><th>Items</th><th>Tracking</th><th></th></tr>${open.map(x => { const u = x.items.reduce((a, i) => a + i.qty, 0), g = x.items.reduce((a, i) => a + i.scanned, 0);
+      return `<tr style="${P.cur && P.cur.id === x.id ? 'background:#88b39522' : ''}"><td>${pkTag(x.status)}</td><td><b>${esc(x.ship_name || '')}</b><div class="muted small">${esc(x.buyer || '')}</div></td><td class="small">${esc(x.show)}</td>
+        <td>${g}/${u}</td><td class="mono small">${esc(x.tracking || '—')}</td><td>${P.cur && P.cur.id === x.id ? '<span class="tag live">Open</span>' : `<button class="btn sm" data-oq="${x.id}">Open</button>`}</td></tr>`; }).join('')
+      || '<tr><td colspan="6" class="muted">Nothing left to pack.</td></tr>'}</table>`;
+    $('#pq').querySelectorAll('[data-oq]').forEach(b => b.onclick = () => {
+      if (P.cur && !confirm('Leave the open package and open this one?')) return;
+      openPkg(P.data.packages.find(x => x.id === Number(b.dataset.oq))); });
+    { const qp = $('#pqp'), st = $('.packst'); if (P.cur) st.appendChild(qp); else st.querySelector('.scanp').after(qp); }   // no package open: queue right under the scan box
     const p = P.cur, el = $('#pkg');
     $('#scan').placeholder = p ? 'Scan each item, then TAKE PICTURE, then FINISH' : 'Scan a shipping label to start';
     if (!p) { el.innerHTML = `<div class="panel"><p class="muted" style="font-size:1.1rem">Scan the shipping label of the next package.</p></div>`; return; }
@@ -289,8 +305,8 @@ async function packStation(main) {
   $('#snap').onclick = snap;
   $('#scan').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target.value; e.target.value = ''; scan(v); } });
   $('#cout').onclick = () => online(async () => {
-    if (P.cur && !confirm('Leave the open package unfinished and clock out?')) return;
-    await rpc('tfd_pack_clock', { p_in: false }); stopCam(); toast('Clocked out'); packStation(main);
+    const goingIn = !P.data.clock_in;
+    await rpc('tfd_pack_clock', { p_in: goingIn }); toast(goingIn ? 'Clocked in' : 'Clocked out'); await load(); draw();
   });
   window.addEventListener('online', () => flush(), { once: true });
   window.addEventListener('hashchange', stopCam, { once: true });
