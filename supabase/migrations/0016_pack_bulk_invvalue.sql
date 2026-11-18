@@ -1,5 +1,6 @@
 -- 0016: packers don't have to clock in to pack (clock in/out is its own button); admins can mark packages packed in bulk;
--- inventory value for the Dashboard; an order whose Part/# was never scanned can be added as exactly that pull.
+-- inventory value for the Dashboard; an order whose Part/# was never scanned can be added as exactly that pull;
+-- lot report (new arrivals for the streamers: image, name, floor, MSRP; never cost).
 
 -- packing no longer requires being clocked in (pay still comes from the clock)
 create or replace function tfd_pack_check(p_pkg bigint, p_need_open boolean) returns packages language plpgsql security definer set search_path = public as $$
@@ -104,5 +105,23 @@ begin
     jsonb_build_object('show', s.id, 'order', o.id), p_reason);
   return jsonb_build_object('ok', true);
 end $$;
+-- lot report: what came in on a confirmed lot, streamer-safe (floor and MSRP only, never cost).
+-- Floor = the same floor the live screen shows (highest cost still on the shelf); if it's all sold, this lot's cost.
+create or replace function tfd_lot_report(p_id bigint) returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare me profiles := tfd_require('admin'); r receipts;
+begin
+  select * into r from receipts where id = p_id;
+  if r.id is null then raise exception 'No such lot'; end if;
+  if r.status <> 'confirmed' then raise exception 'Confirm the lot first'; end if;
+  return jsonb_build_object('id', r.id, 'name', r.name, 'received_date', r.received_date,
+    'items', coalesce((select jsonb_agg(x order by x->>'brand', x->>'name', x->>'sku') from (
+      select jsonb_build_object('sku', p.sku, 'brand', p.brand, 'model', p.model, 'name', p.name, 'color_name', p.color_name, 'color_code', p.color_code,
+          'lens_size', p.lens_size, 'image_url', p.image_url, 'retail_cents', p.retail_cents, 'received', l.qty, 'available', tfd_available(p.sku),
+          'floor_tiktok', (tfd_floor_for(coalesce(m.max_cost, l.cost), 'tiktok')->>'rounded_cents')::int,
+          'floor_whatnot', (tfd_floor_for(coalesce(m.max_cost, l.cost), 'whatnot')->>'rounded_cents')::int) x
+      from (select result_sku sku, sum(received_qty)::int qty, max(unit_cost_cents) cost from receipt_lines where receipt_id = r.id and result_sku is not null and received_qty > 0 group by result_sku) l
+      join products p on p.sku = l.sku
+      left join lateral (select max(unit_cost_cents) max_cost from cost_layers c where c.sku = l.sku and c.qty_remaining > 0) m on true) t), '[]'::jsonb));
+end $$;
 
-grant execute on function tfd_pack_bulk(bigint[]), tfd_inventory_value() to authenticated;
+grant execute on function tfd_pack_bulk(bigint[]), tfd_inventory_value(), tfd_lot_report(bigint) to authenticated;

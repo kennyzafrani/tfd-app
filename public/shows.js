@@ -198,7 +198,8 @@ async function liveScreen(main, s) {
       <div class="lstat"><span class="pill" id="sync"></span></div></div>
     <div class="livegrid"><div>
       <div class="panel scanp"><div class="row"><input id="scan" class="inp scaninp" autocomplete="off" inputmode="numeric">
-        ${listed ? '<button class="btn" id="wm">Record win: off</button>' : s.platform === 'whatnot' ? '<button class="btn" id="gv">Giveaway: off</button>' : ''}</div>
+        ${listed ? '<button class="btn" id="wm">Record win: off</button>' : `<button class="btn primary" id="again" disabled>Run again</button>${s.platform === 'whatnot' ? '<button class="btn" id="gv">Giveaway: off</button>' : ''}`}</div>
+        ${listed ? '' : '<div class="muted small" id="againl" style="margin-top:6px"></div>'}
         <div id="msg"></div></div>
       <div class="panel" id="card"><p class="muted">${listed ? 'Scan a bag to see its details and floor. Lookups hold nothing. Turn on Record win to log the item a buyer picked.' : 'Scan the first pull. For a buyer\'s choice, scan the item they picked.'}</p></div>
     </div><div>
@@ -219,6 +220,14 @@ async function liveScreen(main, s) {
     $('#cv1').textContent = listed ? sv.counts.wins : sv.counts.part + q.length;
     $('#cv2').textContent = sv.counts.total + q.length;
     $('#scan').placeholder = listed ? (L.winMode ? 'Scan the item the buyer picked (records the win)' : 'Scan or type a SKU to look it up') : 'Scan or type a SKU, then Enter';
+    if (!listed) {   // Run again = the last item pulled, if there's still one to run
+      const lastQ = q[q.length - 1], lastP = sv.pulls.find(p => p.status !== 'void' && p.kind !== 'win');
+      const last = lastQ ? lastQ.sku : lastP ? lastP.sku : null, c = last && L.items[last];
+      const capped = last && L.caps && L.caps[last] != null && (L.used[last] || 0) >= L.caps[last];
+      const left = last ? (L.avail[last] ?? 0) : 0;
+      $('#again').disabled = !last || left <= 0 || capped; $('#again').dataset.sku = last || '';
+      $('#againl').textContent = !last ? 'Run again repeats the last item pulled.' : `Last: ${last} ${c ? c.name || [c.brand, c.model].filter(Boolean).join(' ') : ''} · ${capped ? 'list limit reached' : left > 0 ? left + ' left' : 'out of stock'}`;
+    }
     const sy = $('#sync');
     sy.textContent = L.sync === 'off' ? `Offline · ${q.length} waiting` : q.length ? `Saving ${q.length}…` : 'All saved';
     sy.className = 'pill ' + (L.sync === 'off' ? 'bad' : q.length ? 'warn' : 'ok');
@@ -283,13 +292,12 @@ async function liveScreen(main, s) {
     if (listed) return recordWin(sku);
     const c = L.items[sku];
     if (!c) { // not in the local catalog (maybe brand new): ask the server directly
-      if (!await guard(sku)) return;
       try { const r = await rpc('tfd_scan', { p_show: s.id, p_sku: sku, p_client_id: uuid(), p_kind: L.giveNext ? 'giveaway' : 'normal' }); return afterServerScan(r); }
       catch (e) { beep('bad'); return msg(esc(isNetErr(e) ? `SKU ${sku} isn't in this device's list and there's no connection to check it.` : e.message), 'bad'); }
     }
     if ((L.avail[sku] || 0) <= 0) { beep('bad'); $('#card').innerHTML = cardHtml(c, { left: 0 }); return msg('<b>Out of stock — unable to run</b>', 'bad big'); }
     if (L.caps && L.caps[sku] != null && (L.used[sku] || 0) >= L.caps[sku]) { beep('bad'); $('#card').innerHTML = cardHtml(c, { left: L.avail[sku] }); return msg(`<b>List limit reached (${L.caps[sku]} for this show) — unable to run</b>`, 'bad big'); }
-    if (!await guard(sku)) return;
+    // live mapping: running the same item over and over is normal, so no "scanned twice?" check here
     let outside = false;
     if (L.scope && !L.scope.includes(sku)) {
       beep('warn');
@@ -349,6 +357,7 @@ async function liveScreen(main, s) {
 
   // ---- controls
   $('#scan').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target.value; e.target.value = ''; scan(v); } });
+  if ($('#again')) $('#again').onclick = () => { const k = $('#again').dataset.sku; if (k) scan(k); $('#scan').focus(); };
   $('#un').onclick = () => online(async () => {
     const last = L.s.pulls.find(p => p.status === 'held'); if (!last) return toast('Nothing to undo', true);
     if (!await ask('Undo last?', `Undo ${last.kind === 'win' ? 'win' : 'pull'} #${last.pull_no} (SKU ${last.sku})? The unit goes back to available.`, 'Undo')) return;

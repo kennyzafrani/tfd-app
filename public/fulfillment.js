@@ -312,5 +312,12 @@ async function packStation(main) {
   window.addEventListener('hashchange', stopCam, { once: true });
   if (!window.__packFocus) { window.__packFocus = true; document.addEventListener('click', e => { const s = document.querySelector('.packst #scan'); if (s && !e.target.closest('input,select,button,a,textarea,.modal') && !document.querySelector('.modal')) s.focus(); }); }
   draw(); focus();
+  // not clocked in: ask once when the screen opens (never required to pack)
+  if (!P.data.clock_in && S.state.me.role === 'packer') {
+    const m = modal(`<h2>Clock in?</h2><p>You're not clocked in. Clock in now so your packing hours count toward pay. You can still pack either way.</p>
+      <div class="actions"><button class="btn" id="cn">Not now</button><button class="btn primary" id="cy">Clock in</button></div>`);
+    m.querySelector('#cn').onclick = () => { m.remove(); focus(); };
+    m.querySelector('#cy').onclick = () => online(async () => { await rpc('tfd_pack_clock', { p_in: true }); m.remove(); toast('Clocked in'); await load(); draw(); focus(); });
+  }
   if (loadPQ().length) flush();
 }

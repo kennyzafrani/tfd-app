@@ -69,6 +69,7 @@ const csvOf = (head, rows) => '﻿' + [head, ...rows.map(r => head.map(h => r[h]
   const tabs = await page.textContent('.tabs');
   ok(tabs.includes('Fulfillment') && !tabs.includes('Inventory') && !tabs.includes('Shows'), 'packer sees Fulfillment only: ' + tabs.trim().replace(/\s+/g, ' '));
   await page.goto(BASE + '/#fulfillment'); await page.waitForSelector('.packst #scan');
+  await page.waitForSelector('text=Clock in?'); ok(true, 'asked to clock in (not required)'); await page.click('#cn');
   ok((await page.textContent('#clk')).includes('Not clocked in') && (await page.textContent('#cout')) === 'Clock in', 'packing screen opens without clocking in');
   ok((await page.locator('#pq tr').count()) === 3, 'packer sees the whole queue (2 packages)');
   await page.click('#cout'); await page.waitForFunction(() => document.querySelector('#cout').textContent === 'Clock out');

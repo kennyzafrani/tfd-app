@@ -248,7 +248,7 @@ async function lotView(el, id) {
   const req = new Set(r.required || []); req.add('cost');
   el.innerHTML = `<div class="panel"><div class="head"><div style="flex:1;min-width:0"><a href="#inventory/lots" id="back" class="small">← All lots</a>
       <h2 style="margin-top:6px" id="lname">${esc(r.name)} ${draft ? '<span class="tag">Draft</span>' : r.status === 'undone' ? '<span class="tag off">Undone</span>' : '<span class="tag">Confirmed</span>'}</h2></div>
-      <div class="row">${draft ? '<button class="btn danger" id="discard">Delete lot</button>' : '<button class="btn" id="labels">Print SKU labels</button>'}${r.status === 'confirmed' && S.state.me.role === 'admin' ? '<button class="btn" id="unc">Unconfirm (back to draft)</button><button class="btn danger" id="dell">Delete lot</button>' : ''}</div></div>
+      <div class="row">${r.status === 'confirmed' ? '<button class="btn primary" id="lrep">Lot report</button>' : ''}${draft ? '<button class="btn danger" id="discard">Delete lot</button>' : '<button class="btn" id="labels">Print SKU labels</button>'}${r.status === 'confirmed' && S.state.me.role === 'admin' ? '<button class="btn" id="unc">Unconfirm (back to draft)</button><button class="btn danger" id="dell">Delete lot</button>' : ''}</div></div>
     <div class="grid">
       <label class="f">Lot name<input id="hn" class="inp" value="${esc(r.name)}"></label>
       <label class="f"><span>Supplier ${req.has('supplier') ? '<span class="req">*</span>' : ''}</span>${comboInput('hs', 'supplier', r.supplier, draft ? '' : 'disabled')}</label>
@@ -266,6 +266,7 @@ async function lotView(el, id) {
 
   if (!draft) {
     $('#hn').onchange = async () => { try { const x = await rpc('tfd_lot_header', { p_id: id, p_supplier: r.supplier, p_invoice_no: r.invoice_no, p_date: r.received_date, p_name: $('#hn').value }); toast('Renamed'); $('#lname').firstChild.textContent = x.name + ' '; } catch (e) { toast(e.message, true); } };
+    if ($('#lrep')) $('#lrep').onclick = () => lotReport(id);
     $('#labels').onclick = () => printLabels(r.lines.filter(l => l.result_sku).map(l => ({ sku: l.result_sku, name: l.name || `${l.brand || ''} ${l.model || ''}`, qty: l.received_qty })));
     $('#lgrid').innerHTML = `<tr><th class="stk0">#</th><th class="stk1">SKU</th>${LOT_COLS.map(c => `<th>${c[1]}</th>`).join('')}<th>Lot image</th></tr>
       ${r.lines.map(l => `<tr><td class="stk0">${l.line_no}</td><td class="stk1">${l.result_sku ? `<a href="#" data-sku="${l.result_sku}" class="mono"><b>${l.result_sku}</b></a>` : '<span class="muted small">no SKU (0 received)</span>'}
@@ -738,5 +739,53 @@ function printLabels(items) {
     .s{font:600 18px monospace;margin-top:4px}.n{font-size:11px;color:#333;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}@media print{.l{border:0}}</style>
     ${labels.map(it => `<div class="l">${code128svg(it.sku)}<div class="s">${esc(it.sku)}</div><div class="n">${esc(it.name || '')}</div></div>`).join('')}
     <script>setTimeout(()=>print(),300)<\/script>`);
+  w.document.close();
+}
+
+
+// ---- Lot report: a new-arrivals presentation for the streamer group chat (image, name, floor, MSRP; never cost). Save as PDF from the print dialog.
+async function lotReport(id) {
+  const w = window.open('', '_blank');
+  if (!w) return toast('Allow pop-ups for this site to open the lot report', true);
+  w.document.write('<p style="font:16px system-ui;padding:24px">Building the lot report…</p>');
+  let d;
+  try { d = await rpc('tfd_lot_report', { p_id: id }); } catch (e) { w.close(); return toast(e.message, true); }
+  const usd = c => c == null ? '—' : '$' + Math.round(c / 100).toLocaleString();
+  const units = d.items.reduce((a, x) => a + x.received, 0);
+  const brands = [...new Set(d.items.map(x => x.brand).filter(Boolean))];
+  const wn = d.items.some(x => x.floor_whatnot != null);
+  const dt = d.received_date ? new Date(d.received_date + 'T12:00').toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' }) : '';
+  const slide = (x, i) => `<section class="slide"><div class="img">${x.image_url ? `<img src="${esc(x.image_url)}" alt="">` : '<div class="noimg">No image</div>'}</div>
+    <div class="info"><div class="count">${i + 1} / ${d.items.length}</div><div class="brand">${esc(x.brand || '')}</div><h2>${esc(x.name || x.model || '')}</h2>
+      <div class="sub">${[x.model, x.color_name || x.color_code, x.lens_size ? x.lens_size + 'mm' : ''].filter(Boolean).map(esc).join(' · ')}</div>
+      <div class="nums"><div class="floor"><span>FLOOR${wn ? ' · TikTok' : ''}</span><b>${usd(x.floor_tiktok)}</b></div>${wn ? `<div class="floor"><span>FLOOR · Whatnot</span><b>${usd(x.floor_whatnot)}</b></div>` : ''}
+        <div><span>MSRP</span><b>${x.retail_cents ? usd(x.retail_cents) : '—'}</b></div></div>
+      <div class="foot">SKU ${x.sku} · ${x.received} came in</div></div></section>`;
+  w.document.open();
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TheFrameDrop new arrivals ${esc(d.received_date || '')}</title>
+<style>
+  @page { size: 11in 8.5in; margin: 0; }
+  * { box-sizing: border-box; } body { margin: 0; background: #e9ece9; font-family: -apple-system, system-ui, 'Helvetica Neue', Arial, sans-serif; color: #10251c; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .bar { position: sticky; top: 0; z-index: 2; display: flex; gap: 12px; align-items: center; padding: 12px 20px; background: #10251c; color: #fff; font-size: 14px; }
+  .bar button { font: inherit; font-weight: 600; padding: 8px 16px; border-radius: 8px; border: 0; background: #9fd3a8; color: #10251c; cursor: pointer; }
+  .slide { width: 11in; height: 8.5in; margin: 24px auto; background: #fff; display: flex; overflow: hidden; page-break-after: always; break-after: page; box-shadow: 0 2px 12px #0002; }
+  .cover { flex-direction: column; justify-content: center; padding: 1in; background: #10251c; color: #fff; }
+  .cover .k { letter-spacing: .3em; font-size: 16px; color: #9fd3a8; font-weight: 700; } .cover h1 { font-size: 88px; line-height: 1; margin: 18px 0; letter-spacing: -.02em; }
+  .cover .m { font-size: 24px; opacity: .85; } .cover .b { margin-top: 40px; font-size: 18px; opacity: .7; max-width: 8in; line-height: 1.5; }
+  .img { flex: 1.25; background: #f4f6f4; display: flex; align-items: center; justify-content: center; padding: .4in; } .img img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .noimg { color: #889; font-size: 20px; }
+  .info { flex: 1; padding: .6in .55in; display: flex; flex-direction: column; }
+  .count { color: #889; font-size: 14px; letter-spacing: .1em; } .brand { margin-top: 28px; text-transform: uppercase; letter-spacing: .2em; font-weight: 700; color: #2f7a4b; font-size: 16px; }
+  h2 { font-size: 40px; line-height: 1.1; margin: 10px 0 8px; } .sub { color: #556; font-size: 17px; }
+  .nums { margin-top: auto; display: grid; gap: 18px; } .nums span { display: block; font-size: 13px; letter-spacing: .15em; color: #667; font-weight: 600; } .nums b { font-size: 36px; }
+  .floor b { font-size: 64px; color: #10251c; } .foot { margin-top: 26px; color: #889; font-size: 14px; }
+  @media print { body { background: #fff; } .bar { display: none; } .slide { margin: 0; box-shadow: none; } }
+  @media screen and (max-width: 11.5in) { .slide { transform-origin: top left; } }
+</style></head><body>
+<div class="bar"><b>Lot report</b><span style="opacity:.75">${d.items.length} style${d.items.length === 1 ? "" : "s"} · ${units} units. Click Save as PDF, then pick "Save as PDF" as the printer.</span><span style="flex:1"></span><button onclick="window.print()">Save as PDF</button></div>
+<section class="slide cover"><div class="k">THEFRAMEDROP · NEW ARRIVALS</div><h1>Just landed</h1><div class="m">${esc(dt)} · ${d.items.length} style${d.items.length === 1 ? "" : "s"} · ${units} unit${units === 1 ? "" : "s"}</div>
+  <div class="b">${brands.map(esc).join(' · ')}</div><div class="b" style="margin-top:auto;font-size:15px">Floor = lowest price each frame can go for. Don't run below it.</div></section>
+${d.items.map(slide).join('')}
+</body></html>`);
   w.document.close();
 }

@@ -64,4 +64,16 @@ reset role;
 select pg_temp.ok((select count(*) from packages where show_id = :s and status = 'packed') = 3, 'all 3 packed');
 select pg_temp.ok((select packed_by from packages where id = :k2) = 'Kenny', 'packed by Kenny');
 select pg_temp.ok(exists (select 1 from activity_log where summary like 'Marked packed by admin%'), 'bulk pack logged');
+-- lot report: confirmed lots only, floor + MSRP, never cost
+select id as lot from receipts where status = 'confirmed' order by id limit 1 \gset
+set role authenticated; select pg_temp.as_kenny();
+create temp table lr as select tfd_lot_report(:lot) j; 
+select pg_temp.ok(jsonb_array_length(j->'items') > 0, 'lot report lists the lot''s SKUs') from lr;
+select pg_temp.ok((j->'items'->0->>'floor_tiktok')::int > 0, 'TikTok floor on each SKU') from lr;
+select pg_temp.ok(not (j::text ~ 'cost'), 'no cost in the lot report') from lr;
+reset role;
+select pg_temp.ok((select (x->>'floor_tiktok')::int = (tfd_card(x->>'sku', 'tiktok')->>'floor_cents')::int from lr, jsonb_array_elements(j->'items') x where (tfd_card(x->>'sku','tiktok')->>'floor_cents') is not null limit 1), 'same floor as the live screen');
+set role authenticated; select pg_temp.as_pat();
+select pg_temp.fails(format('select tfd_lot_report(%s)', :lot), 'packer cannot open the lot report', '%Admins only%');
+select pg_temp.as_kenny();
 select 'ALL 0016 CHECKS PASSED';

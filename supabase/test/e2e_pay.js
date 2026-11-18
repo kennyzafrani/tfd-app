@@ -25,6 +25,14 @@ const ok = (c, m) => { if (!c) throw new Error('FAILED: ' + m); log('ok - ' + m)
     'Designer Eyes,INV-1,2026-11-10,Ray-Ban,RB3025,001,58,8053672000001,Aviator Classic Gold,Gold/Green,6,6,50.00,163.00,1.5,Bags & Accessories,Sunglasses,,,Q-01');
   await page.goto(BASE + '/#inventory/lots'); await page.waitForSelector('#newr'); await page.click('#newr'); await page.setInputFiles('#rf', lot); await page.click('#rgo');
   await page.waitForSelector('#confirm:not([disabled])'); await page.click('#confirm'); await page.click('#cy'); await page.waitForSelector('text=Confirmed');
+  // lot report: new-arrivals presentation (floor + MSRP, no cost)
+  await page.waitForSelector('#lrep');
+  const [rep] = await Promise.all([page.waitForEvent('popup'), page.click('#lrep')]);
+  await rep.waitForSelector('.slide:not(.cover)');
+  const rt = await rep.textContent('body');
+  ok(rt.includes('Just landed') && rt.includes('FLOOR') && rt.includes('MSRP') && rt.includes('$163') && !/cost/i.test(rt), 'lot report: cover + slide with floor and MSRP, no cost');
+  await rep.setViewportSize({ width: 1100, height: 850 }); await rep.screenshot({ path: path.join(OUT, 'lotreport.png'), fullPage: true });
+  await rep.close();
 
   const ids = await page.evaluate(async () => {
     const ppl = await rpc('tfd_profiles_list', {}).catch(() => null);
